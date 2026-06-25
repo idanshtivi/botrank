@@ -43,6 +43,7 @@ add_executable(SynthCoreTests
     Tests/InfrastructureTests.cpp
     Tests/DspTests.cpp
     Tests/AnalysisTests.cpp
+    Tests/OscillatorTests.cpp
 )
 
 target_link_libraries(SynthCoreTests
