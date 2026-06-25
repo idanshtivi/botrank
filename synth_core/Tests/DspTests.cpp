@@ -110,28 +110,21 @@ TEST(MathTest, ClampMid)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NoiseGenerator
+// xorshift32 RNG helper (Minimoog noise deferred to Mixer milestone)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST(NoiseTest, WhiteNoiseRange)
+TEST(RngTest, Xorshift32Deterministic)
 {
-    NoiseGenerator ng;
-    ng.seed(0xDEADBEEFu);
-
-    for (int i = 0; i < 10000; ++i) {
-        float v = ng.whiteNoise();
-        EXPECT_GE(v, -1.0f);
-        EXPECT_LE(v,  1.0f);
+    uint32_t a = 42u, b = 42u;
+    for (int i = 0; i < 100; ++i) {
+        EXPECT_EQ(xorshift32(a), xorshift32(b));
     }
 }
 
-TEST(NoiseTest, WhiteNoiseDeterministic)
+TEST(RngTest, Xorshift32NonZero)
 {
-    NoiseGenerator a, b;
-    a.seed(42u);
-    b.seed(42u);
-
-    for (int i = 0; i < 100; ++i) {
-        EXPECT_FLOAT_EQ(a.whiteNoise(), b.whiteNoise());
+    uint32_t state = 1u;
+    for (int i = 0; i < 1000; ++i) {
+        EXPECT_NE(xorshift32(state), 0u);
     }
 }

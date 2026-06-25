@@ -25,19 +25,15 @@ private:
     double _sampleRate = 44100.0;
 };
 
-// White-noise PRNG (xorshift32 – no heap)
-class NoiseGenerator {
-public:
-    NoiseGenerator() = default;
-    void  seed(uint32_t s);
-    float whiteNoise();   // uniform [-1, 1]
-    float pinkNoise();    // Paul Kellet's approximation
-
-private:
-    uint32_t _state = 0x12345678u;
-    // Pink-noise state registers
-    float _b[7] = {};
-};
+// Minimal deterministic RNG – xorshift32 step only.
+// Minimoog-style white/pink noise generation is deferred to the Mixer milestone.
+inline uint32_t xorshift32(uint32_t& state)
+{
+    state ^= state << 13u;
+    state ^= state >> 17u;
+    state ^= state << 5u;
+    return state;
+}
 
 // Utility math helpers (constexpr-friendly, no dynamic allocation)
 namespace Math {
