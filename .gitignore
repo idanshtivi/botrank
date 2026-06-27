@@ -24,6 +24,9 @@
 # misc
 .DS_Store
 *.pem
+.tmp/
+output.wav
+mode_visibility_check.png
 
 # debug
 npm-debug.log*
