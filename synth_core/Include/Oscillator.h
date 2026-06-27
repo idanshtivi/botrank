@@ -2,33 +2,70 @@
 
 namespace SynthCore {
 
-// Oscillator waveform selection – waveform generation deferred to Milestone 2
-enum class OscWaveform { Sawtooth, Triangle, Square };
+enum class Waveform {
+    Triangle,
+    TriangleSaw,
+    Saw,
+    ReverseSaw,
+    Square,
+    WidePulse,
+    NarrowPulse,
+    Sawtooth = Saw
+};
 
-// Stub placeholder for Milestone 1 implementation.
-// Declares the full interface; all audio-generating methods return silence.
+using OscWaveform = Waveform;
+
+enum class OscillatorRange {
+    Low,
+    ThirtyTwoFoot,
+    SixteenFoot,
+    EightFoot,
+    FourFoot,
+    TwoFoot
+};
+
+// Band-limited oscillator using the PolyBLEP residual method.
 class Oscillator {
 public:
-    Oscillator() = default;
+    Oscillator();
 
     void setSampleRate(double sampleRate);
     void setFrequency(double hz);
-    void setWaveform(OscWaveform w);
-    void setOctave(int semitoneOffset);  // +/-24 semitones
+    void setMidiNote(double note);
+    void setWaveform(Waveform w);
+    void setRange(OscillatorRange range);
+    void setDetuneSemitones(double semitones);
+    void setFineTuneCents(double cents);
+    void setPulseWidth(double width);
+    void setDriftCents(double cents);
+    void setKeyboardTrackingEnabled(bool enabled);
+    void setOctave(int semitoneOffset);
 
-    // Returns next sample [-1, 1]. Outputs silence until Milestone 1.
+    float processSample();
     float process();
 
     void reset();
 
 private:
     double _sampleRate = 44100.0;
-    double _frequency  = 440.0;
-    OscWaveform _waveform = OscWaveform::Sawtooth;
-    int    _octaveOffset  = 0;
+    double _frequency = 440.0;
+    double _baseMidiNote = 69.0;
+    Waveform _waveform = Waveform::Saw;
+    OscillatorRange _range = OscillatorRange::EightFoot;
+    int _octaveOffset = 0;
+    double _detuneSemitones = 0.0;
+    double _fineTuneCents = 0.0;
+    double _driftCents    = 0.0;
+    double _pulseWidth = 0.5;
+    bool _keyboardTrackingEnabled = true;
 
-    // Phase accumulator (populated in Milestone 1)
     double _phase = 0.0;
+    double _phaseInc = 0.0;
+    double _triangleState = 0.0;
+
+    void _updatePhaseInc();
+    double _effectiveFrequency() const;
+    static int _rangeSemitones(OscillatorRange range);
 };
 
 } // namespace SynthCore

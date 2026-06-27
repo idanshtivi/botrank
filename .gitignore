@@ -19,6 +19,7 @@
 
 # production
 /build
+/trusted_bin
 
 # misc
 .DS_Store

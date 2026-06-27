@@ -2,27 +2,40 @@
 
 namespace SynthCore {
 
-// Passive resistive summing + common-emitter pre-amp saturation stub
-// (full model deferred to Milestone 3)
+enum class MixerSource {
+    Osc1 = 0,
+    Osc2,
+    Osc3,
+    Noise,
+    ExternalInput,
+    Count
+};
+
 class Mixer {
 public:
     Mixer() = default;
 
     void setSampleRate(double sampleRate);
+    void setSourceEnabled(MixerSource source, bool enabled);
+    void setSourceLevel(MixerSource source, double level);
+    void setDrive(double drive);
+    void reset();
+    double processSample(double osc1, double osc2, double osc3, double noise, double ext);
 
-    // Level controls [0, 1] for each source
     void setOsc1Level(float v);
     void setOsc2Level(float v);
     void setOsc3Level(float v);
     void setNoiseLevel(float v);
     void setExtLevel(float v);
-
-    // Returns mixed+saturated sample. Outputs silence until Milestone 3.
     float process(float osc1, float osc2, float osc3, float noise, float ext);
 
 private:
     double _sampleRate = 44100.0;
-    float  _levels[5]  = {1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+    double _levels[static_cast<int>(MixerSource::Count)] = {0.7, 0.4, 0.0, 0.0, 0.0};
+    bool _enabled[static_cast<int>(MixerSource::Count)] = {true, true, false, false, false};
+    double _drive = 1.6;
+
+    static int _index(MixerSource source);
 };
 
 } // namespace SynthCore
