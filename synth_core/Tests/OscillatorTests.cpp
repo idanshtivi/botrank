@@ -62,6 +62,14 @@ static double dftMagnitude(const std::vector<float>& buf,
     return std::sqrt(re * re + im * im) / N;
 }
 
+static double maxAbsDiff(const std::vector<float>& a, const std::vector<float>& b)
+{
+    double d = 0.0;
+    for (size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+        d = std::max(d, std::abs(static_cast<double>(a[i] - b[i])));
+    return d;
+}
+
 // ── Non-silence ───────────────────────────────────────────────────────────────
 
 TEST(OscillatorTest, SawtoothIsNotSilent)
@@ -348,4 +356,34 @@ TEST(OscillatorTest, HighFrequencyFundamentalPresent)
 
     double mag = dftMagnitude(buf, kFreq, kSR);
     EXPECT_GT(mag, 0.1) << "880 Hz fundamental weak: " << mag;
+}
+
+TEST(OscillatorTest, PulseWidthAffectsOnlyPulseCapableWaveforms)
+{
+    auto renderWithPulseWidth = [](Waveform waveform, double pulseWidth) {
+        Oscillator osc;
+        osc.setSampleRate(44100.0);
+        osc.setFrequency(220.0);
+        osc.setWaveform(waveform);
+        osc.setPulseWidth(pulseWidth);
+        osc.reset();
+
+        std::vector<float> buf(4096);
+        render(osc, buf);
+        return buf;
+    };
+
+    for (auto waveform : {Waveform::Square, Waveform::WidePulse, Waveform::NarrowPulse}) {
+        const auto narrow = renderWithPulseWidth(waveform, 0.10);
+        const auto wide = renderWithPulseWidth(waveform, 0.90);
+        EXPECT_GT(maxAbsDiff(narrow, wide), 0.05)
+            << "PW must affect pulse-capable waveforms";
+    }
+
+    for (auto waveform : {Waveform::Triangle, Waveform::TriangleSaw, Waveform::Saw, Waveform::ReverseSaw}) {
+        const auto narrow = renderWithPulseWidth(waveform, 0.10);
+        const auto wide = renderWithPulseWidth(waveform, 0.90);
+        EXPECT_LT(maxAbsDiff(narrow, wide), 1.0e-6)
+            << "PW must not affect non-pulse waveforms";
+    }
 }

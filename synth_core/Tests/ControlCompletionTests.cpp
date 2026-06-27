@@ -97,7 +97,7 @@ TEST(ControlCompletion, AllParamsNoNanAtExtremes)
         {ParamId::Legato,                0.0f, 1.0f},
         {ParamId::Retrigger,             0.0f, 1.0f},
         {ParamId::NotePriority,          0.0f, 2.0f},
-        {ParamId::Osc1PulseWidth,        0.05f,0.95f},
+        {ParamId::Osc1PulseWidth,        0.10f,0.90f},
         {ParamId::AnalogDrift,           0.0f, 1.0f},
     };
 

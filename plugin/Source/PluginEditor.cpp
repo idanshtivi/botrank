@@ -14,8 +14,8 @@ constexpr auto panelTop = 104;
 constexpr float titleFont = 44.0f;
 constexpr float subtitleFont = 12.5f;
 constexpr float sectionTitleFont = 15.4f;
-constexpr float controlLabelFont = 13.0f;
-constexpr float compactLabelFont = 11.4f;
+constexpr float controlLabelFont = 14.8f;
+constexpr float compactLabelFont = 13.2f;
 constexpr float valueFont = 13.8f;
 
 const auto panelBackground = juce::Colour(0xffbebeb4);
@@ -39,6 +39,11 @@ const auto woodHighlight = juce::Colour(0xff7b4b28);
 juce::FontOptions uiFont(float size, int style = juce::Font::plain)
 {
     return juce::FontOptions("Segoe UI", size, style);
+}
+
+juce::Font trackedLabelFont(float size, int style = juce::Font::bold)
+{
+    return juce::Font(uiFont(size, style)).withExtraKerningFactor(0.035f);
 }
 }
 
@@ -66,6 +71,7 @@ namespace Fmt {
             return (c > 0 ? juce::String("+") : juce::String()) + juce::String(c) + " c";
         }
         if (pid == "lfoRate")                         return juce::String(v, 2) + " Hz";
+        if (pid == "osc1PulseWidth")                  return juce::String(juce::roundToInt(v * 100.0)) + "%";
         return juce::String(v, 2);
     }
 
@@ -84,6 +90,10 @@ namespace Fmt {
             return t.endsWithIgnoreCase("st") ? t.dropLastCharacters(2).trim().getDoubleValue() : t.getDoubleValue();
         if (pid == "fineTune")
             return t.endsWithIgnoreCase("c") ? t.dropLastCharacters(1).trim().getDoubleValue() : t.getDoubleValue();
+        if (pid == "osc1PulseWidth") {
+            const double value = t.endsWithChar('%') ? t.dropLastCharacters(1).trim().getDoubleValue() : t.getDoubleValue();
+            return value > 1.0 ? value / 100.0 : value;
+        }
         return t.getDoubleValue();
     }
 }
@@ -190,8 +200,8 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     playModeLabel->setText("MODE", juce::dontSendNotification);
     playModeLabel->setJustificationType(juce::Justification::centred);
     playModeLabel->setColour(juce::Label::textColourId, Theme::textMuted);
-    playModeLabel->setFont(Theme::uiFont(Theme::compactLabelFont, juce::Font::bold));
-    playModeLabel->setSize(96, 11);
+    playModeLabel->setFont(Theme::trackedLabelFont(Theme::compactLabelFont));
+    playModeLabel->setSize(100, 15);
     addAndMakeVisible(*playModeLabel);
     playModeAttachment = std::make_unique<ComboBoxAttachment>(processor.parameters, "playMode", *playModeCombo);
 
@@ -206,9 +216,14 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
         if (osc == 3) addToggle("Keyboard", "osc3KeyboardTracking");
         addKnob("Level", "osc" + juce::String(osc) + "Level");
     }
-    // OSC extras — placed in osc1 row gap and below osc3
+    // OSC extra — placed in osc1 row gap. Analog Drift stays in APVTS but is hidden from the panel.
     addKnob("PW",    "osc1PulseWidth");          // sliders[8]
-    addKnob("Analog Drift", "analogDrift");      // sliders[9]
+    auto& analogDrift = addKnob("Analog Drift", "analogDrift"); // sliders[9], hidden for state compatibility
+    analogDrift.setVisible(false);
+    if (auto it = attachedLabels.find(&analogDrift); it != attachedLabels.end() && it->second != nullptr)
+        it->second->setVisible(false);
+    if (combos.size() > 1 && combos[1] != nullptr)
+        combos[1]->onChange = [this] { updatePulseWidthControlState(); };
 
     // MIXER — sliders[10..11], buttons[7], combos[7]
     addKnob("Drive", "mixerDrive");              // sliders[10]
@@ -229,8 +244,8 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     // MODULATION — buttons[8], sliders[20..22], combos[9]
     addKnob("LFO Rate", "lfoRate");              // sliders[20]
     addKnob("LFO Amt",  "lfoAmount");            // sliders[21]
-    addCombo("Dest", "lfoDestination", {"Pitch", "Filter", "Pulse Width"}); // combos[9]
-    addKnob("Mod Wheel", "modWheelAmount");      // sliders[22]
+    addCombo("", "lfoDestination", {"Pitch", "Filter", "Pulse Width"}); // combos[9]
+    addKnob("Wheel Depth", "modWheelAmount");    // sliders[22]
 
     // LOUDNESS CONTOUR — sliders[23..26]
     addKnob("Attack",  "loudnessAttack");        // sliders[23]
@@ -309,14 +324,8 @@ juce::Slider& LadderVoiceAudioProcessorEditor::addKnob(const juce::String& text,
     label->setText(text, juce::dontSendNotification);
     label->setJustificationType(juce::Justification::centred);
     label->setColour(juce::Label::textColourId, Theme::textSecondary);
-    const bool compactKnobLabel = parameterId.startsWithIgnoreCase("filter");
-    const bool utilityKnobLabel = parameterId.startsWithIgnoreCase("lfo")
-        || parameterId == "analogDrift"
-        || parameterId == "modWheelAmount";
-    label->setFont(Theme::uiFont(compactKnobLabel ? Theme::compactLabelFont
-                                                  : (utilityKnobLabel ? 11.0f : Theme::controlLabelFont),
-                                 juce::Font::bold));
-    label->setSize(juce::jmax(56, juce::jmax(valueWidth + 18, text.length() * 7 + 12)), 13);
+    label->setFont(Theme::trackedLabelFont(Theme::controlLabelFont));
+    label->setSize(juce::jmax(64, juce::jmax(valueWidth + 20, text.length() * 9 + 14)), 16);
     auto* sliderPtr = slider.get();
     auto* labelPtr = label.get();
     addAndMakeVisible(*label);
@@ -366,8 +375,8 @@ juce::ComboBox& LadderVoiceAudioProcessorEditor::addCombo(const juce::String& te
     label->setText(text, juce::dontSendNotification);
     label->setJustificationType(juce::Justification::centred);
     label->setColour(juce::Label::textColourId, Theme::textMuted);
-    label->setFont(Theme::uiFont(Theme::compactLabelFont, juce::Font::bold));
-    label->setSize(96, 11);
+    label->setFont(Theme::trackedLabelFont(Theme::controlLabelFont));
+    label->setSize(100, 15);
     auto* comboPtr = combo.get();
     auto* labelPtr = label.get();
     addAndMakeVisible(*label);
@@ -405,11 +414,13 @@ void LadderVoiceAudioProcessorEditor::positionControlLabels()
                 break;
             }
         }
-        const int labelHeight = combo ? 11 : 13;
-        const int gap = combo ? 1 : 2;
+        const int labelHeight = combo ? 15 : 16;
+        const int gap = 1;
         const int labelWidth = juce::jmax(bounds.getWidth(), label->getWidth());
         const int x = bounds.getCentreX() - labelWidth / 2;
-        const int y = bounds.getY() - labelHeight - gap;
+        int y = bounds.getY() - labelHeight - gap;
+        if (component->getName() == "filterCutoff")
+            y = bounds.getY() - 4;
 
         label->setBounds(x, y, labelWidth, labelHeight);
         label->toFront(false);
@@ -419,10 +430,29 @@ void LadderVoiceAudioProcessorEditor::positionControlLabels()
         const auto bounds = playModeCombo->getBounds();
         const int labelWidth = juce::jmax(bounds.getWidth(), playModeLabel->getWidth());
         playModeLabel->setBounds(bounds.getCentreX() - labelWidth / 2,
-                                 bounds.getY() - 12,
+                                 bounds.getY() - 17,
                                  labelWidth,
-                                 11);
+                                 15);
         playModeLabel->toFront(false);
+    }
+}
+
+void LadderVoiceAudioProcessorEditor::updatePulseWidthControlState()
+{
+    if (combos.size() <= 1 || sliders.size() <= 8 || combos[1] == nullptr || sliders[8] == nullptr)
+        return;
+
+    const int waveformIndex = combos[1]->getSelectedItemIndex();
+    const bool pulseCapable = waveformIndex >= 4 && waveformIndex <= 6;
+    auto* pulseWidthSlider = sliders[8].get();
+    pulseWidthSlider->setVisible(pulseCapable);
+    pulseWidthSlider->setEnabled(pulseCapable);
+    pulseWidthSlider->setAlpha(1.0f);
+
+    if (auto it = attachedLabels.find(pulseWidthSlider); it != attachedLabels.end() && it->second != nullptr) {
+        it->second->setVisible(pulseCapable);
+        it->second->setEnabled(pulseCapable);
+        it->second->setAlpha(1.0f);
     }
 }
 
@@ -445,15 +475,16 @@ void LadderVoiceAudioProcessorEditor::drawSection(juce::Graphics& g, juce::Recta
     drawModuleScrews(g, bounds);
 
     auto headerBounds = bounds.removeFromTop(Theme::sectionHeaderHeight + 4);
-    const auto header = headerBounds.reduced(14, 5).toFloat();
-    g.setGradientFill(juce::ColourGradient(Theme::sectionHeader.brighter(0.09f), header.getX(), header.getY(),
-                                           Theme::sectionHeader.darker(0.03f), header.getX(), header.getBottom(), false));
-    g.fillRoundedRectangle(header, 3.0f);
-    g.setColour(juce::Colour(0x20ffffff));
-    g.drawLine(header.getX() + 4.0f, header.getY() + 1.0f, header.getRight() - 4.0f, header.getY() + 1.0f, 0.75f);
+    const auto headerText = headerBounds.reduced(18, 4);
+    g.setColour(juce::Colour(0x18000000));
+    g.drawLine(static_cast<float>(headerText.getX()),
+               static_cast<float>(headerText.getBottom() - 1),
+               static_cast<float>(headerText.getRight()),
+               static_cast<float>(headerText.getBottom() - 1),
+               0.8f);
     g.setColour(Theme::textPrimary.withAlpha(0.96f));
     g.setFont(Theme::uiFont(Theme::sectionTitleFont, juce::Font::bold));
-    g.drawFittedText(title.toUpperCase(), header.toNearestInt().reduced(4, 0), juce::Justification::centred, 1, 0.88f);
+    g.drawFittedText(title.toUpperCase(), headerText, juce::Justification::centred, 1, 0.88f);
     g.setColour(Theme::accentGold.withAlpha(0.24f));
     g.drawLine(f.getX() + 12.0f, static_cast<float>(headerBounds.getBottom() - 1),
                f.getRight() - 12.0f, static_cast<float>(headerBounds.getBottom() - 1), 0.85f);
@@ -586,7 +617,7 @@ void LadderVoiceAudioProcessorEditor::resized()
     setComponentBounds(buttons, b, {130, 350, 122, 26});       // [b2] retrigger
     setComponentBounds(combos, c, {126, 394, 124, 24});        // [c0] notePriority
     setComponentBounds(sliders, s, {138, 436, 98, 76});        // [s1] pitchBendRange → render 66px
-    setComponentBounds(sliders, s, {138, 532, 98, 46});        // [s2] fineTune
+    setComponentBounds(sliders, s, {138, 532, 98, 62});        // [s2] fineTune
     // OSC BANK — columns: Enable@298 Wave@398 Range@500 PW/Detune@574 Level@680
     // Knob slots w=102 h=124 → knobBox 98×102 → render 98px, medium strip (98≥76)
     for (int osc = 0; osc < 3; ++osc) {
@@ -595,12 +626,11 @@ void LadderVoiceAudioProcessorEditor::resized()
         setComponentBounds(combos,  c, {398, rowY + 2,  96, 26});            // [c1,3,5] wave
         setComponentBounds(combos,  c, {500, rowY + 2,  74, 26});            // [c2,4,6] range
         if (osc > 0) setComponentBounds(sliders, s, {578, rowY + 8, 92, 100}); // [s4,6] detune
-        if (osc == 2) setComponentBounds(buttons, b, {300, rowY + 36, 88, 26}); // [b6] keyboard
+        if (osc == 2) setComponentBounds(buttons, b, {300, rowY + 54, 88, 26}); // [b6] keyboard
         setComponentBounds(sliders, s, {674, rowY + 8, 92, 100});           // [s3,5,7] level
     }
     setComponentBounds(sliders, s, {578, 162, 92, 100});      // [s8] osc1PulseWidth
-    // Analog Drift: global OSC section control, centered in wave/range column zone below OSC3
-    setComponentBounds(sliders, s, {436, 500, 92, 72});        // [s9] analogDrift
+    setComponentBounds(sliders, s, {0, 0, 0, 0});              // [s9] analogDrift hidden, APVTS kept
 
     // MIXER — section {800,104,150,240}
     // mixerDrive: knobBox 140×90 → render 90px, large strip (140≥100)
@@ -646,4 +676,5 @@ void LadderVoiceAudioProcessorEditor::resized()
     presetNextButton.setBounds(950, 42, 28, 26);
 
     positionControlLabels();
+    updatePulseWidthControlState();
 }

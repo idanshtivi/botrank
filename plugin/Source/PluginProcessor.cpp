@@ -98,6 +98,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
                 : text.getDoubleValue());
         });
 
+    auto percentText = juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction([](float v, int) {
+            return juce::String(juce::roundToInt(v * 100.0f)) + "%";
+        })
+        .withValueFromStringFunction([](const juce::String& t) -> float {
+            const auto text = t.trim();
+            const auto numeric = text.endsWithChar('%') ? text.dropLastCharacters(1).trim() : text;
+            const auto value = static_cast<float>(numeric.getDoubleValue());
+            return value > 1.0f ? value / 100.0f : value;
+        });
+
     juce::NormalisableRange<float> unitRange(0.0f, 1.0f, 0.01f);
     juce::NormalisableRange<float> driveRange(0.0f, 3.0f, 0.01f);
     juce::NormalisableRange<float> attackRange(0.001f, 10.0f);
@@ -172,7 +183,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
     boolParam("retrigger","Retrigger", def(SynthCore::ParamId::Retrigger) >= 0.5f);
     choiceParam("notePriority", "Note Priority", {"Low", "Last", "High"}, juce::roundToInt(def(SynthCore::ParamId::NotePriority)));
     floatParam("osc1PulseWidth", "Osc 1 Pulse Width",
-               juce::NormalisableRange<float>(0.05f, 0.95f, 0.01f), def(SynthCore::ParamId::Osc1PulseWidth), twoDecimals);
+               juce::NormalisableRange<float>(0.10f, 0.90f, 0.01f), def(SynthCore::ParamId::Osc1PulseWidth), percentText);
     floatParam("analogDrift", "Analog Drift", unitRange, def(SynthCore::ParamId::AnalogDrift), twoDecimals);
 
     auto centsAttr = juce::AudioParameterFloatAttributes()

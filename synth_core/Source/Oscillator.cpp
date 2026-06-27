@@ -73,7 +73,7 @@ void Oscillator::setFineTuneCents(double cents)
 void Oscillator::setPulseWidth(double width)
 {
     if (!std::isfinite(width)) width = 0.5;
-    _pulseWidth = std::clamp(width, 0.05, 0.95);
+    _pulseWidth = std::clamp(width, 0.10, 0.90);
 }
 
 void Oscillator::setDriftCents(double cents)
@@ -138,7 +138,7 @@ float Oscillator::processSample()
     saw -= polyBlep(_phase, _phaseInc);
 
     auto pulse = [this](double width) {
-        width = std::clamp(width, 0.05, 0.95);
+        width = std::clamp(width, 0.10, 0.90);
         double y = _phase < width ? 1.0 : -1.0;
         y += polyBlep(_phase, _phaseInc);
         double t2 = _phase - width;
@@ -159,13 +159,13 @@ float Oscillator::processSample()
         out = pulse(_pulseWidth);
         break;
     case Waveform::WidePulse:
-        out = pulse(0.65);
+        out = pulse(std::clamp(_pulseWidth + 0.15, 0.10, 0.90));
         break;
     case Waveform::NarrowPulse:
-        out = pulse(0.25);
+        out = pulse(std::clamp(_pulseWidth - 0.25, 0.10, 0.90));
         break;
     case Waveform::Triangle: {
-        const double square = pulse(_pulseWidth);
+        const double square = pulse(0.5);
         _triangleState += square * _phaseInc * 4.0;
         _triangleState *= 0.9995;
         out = _triangleState;

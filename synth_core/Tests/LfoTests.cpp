@@ -193,6 +193,16 @@ TEST(LfoTest, ModWheelAtZeroDoesNotBlockBaseLfo)
         << "Mod wheel at 0 must not mute the base LFO amount";
 }
 
+TEST(LfoTest, VisibleModWheelAmountWorksWithoutMidiCc)
+{
+    // Standalone UI knob must be audible without an external MIDI mod wheel.
+    SynthEngine on  = makeSustainEngine(true,  5.0f, 0.0f, 0.0f, 1.0f);
+    SynthEngine off = makeSustainEngine(false, 5.0f, 0.0f, 0.0f, 1.0f);
+
+    EXPECT_GT(maxAbsDiff(renderN(on, 44100), renderN(off, 44100)), 0.01)
+        << "Visible Mod Wheel/Wheel Depth knob must add LFO depth without MIDI CC1";
+}
+
 // ── Output always stays finite and bounded regardless of LFO settings ────────
 TEST(LfoTest, OutputRemainsFiniteAndBoundedAllDestinations)
 {

@@ -465,8 +465,9 @@ float SynthEngine::processSample()
     const bool   lfoOn      = _params[static_cast<int>(ParamId::LfoEnabled)] >= 0.5f;
     const double lfoAmt     = static_cast<double>(_params[static_cast<int>(ParamId::LfoAmount)]);
     const double mwAmt      = static_cast<double>(_params[static_cast<int>(ParamId::ModWheelAmount)]);
-    // Mod wheel adds to base amount — it never blocks the base amount.
-    const double totalDepth = lfoAmt + mwAmt * _modWheelPosition;
+    // The visible Mod Wheel knob is a standalone extra depth in the standalone app.
+    // MIDI CC1 can still push the same depth harder while never blocking base LFO amount.
+    const double totalDepth = std::clamp(lfoAmt + mwAmt + (mwAmt * _modWheelPosition), 0.0, 1.0);
     const double lfoValue   = lfoOn ? totalDepth * lfoRaw : 0.0;
     const int    lfoDest    = static_cast<int>(std::lround(
                                   static_cast<double>(_params[static_cast<int>(ParamId::LfoDestination)])));
@@ -481,7 +482,7 @@ float SynthEngine::processSample()
     }
     // Dest 2 — Pulse Width (square/pulse waveforms only)
     else if (lfoDest == 2) {
-        const double pw = std::clamp(0.5 + lfoValue * 0.4, 0.05, 0.95);
+        const double pw = std::clamp(0.5 + lfoValue * 0.4, 0.10, 0.90);
         for (int osc = 1; osc <= 3; ++osc) {
             _synthVoice.oscillators.setOscillatorPulseWidth(osc, pw);
             for (auto& voice : _polyVoices)
