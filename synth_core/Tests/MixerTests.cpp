@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "../Include/Mixer.h"
+#include <algorithm>
 #include <cmath>
+#include <utility>
 
 using namespace SynthCore;
 
@@ -90,6 +92,39 @@ TEST(MixerTest, DriveClampAndSaturationBoundsOutput)
     EXPECT_TRUE(std::isfinite(out));
     EXPECT_LE(out, 1.0);
     EXPECT_GE(out, -1.0);
+}
+
+TEST(MixerTest, MainDriveHasClearCharacterRange)
+{
+    auto render = [](double drive) {
+        Mixer mixer;
+        mixer.setDrive(drive);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceEnabled(MixerSource::Osc2, true);
+        mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+        mixer.setSourceLevel(MixerSource::Osc2, 0.85);
+
+        double diffFromClean = 0.0;
+        double peak = 0.0;
+        for (int i = 0; i < 512; ++i) {
+            const double phase = static_cast<double>(i) / 512.0;
+            const double saw = 2.0 * phase - 1.0;
+            const double square = phase < 0.5 ? 1.0 : -1.0;
+            const double clean = 0.45 * (saw + 0.85 * square);
+            const double out = mixer.processSample(saw, square, 0.0, 0.0, 0.0);
+            diffFromClean += std::abs(out - clean);
+            peak = std::max(peak, std::abs(out));
+        }
+
+        return std::pair<double, double>(diffFromClean / 512.0, peak);
+    };
+
+    const auto mid = render(1.5);
+    const auto high = render(3.0);
+
+    EXPECT_GT(mid.first, 0.045);
+    EXPECT_GT(high.first, mid.first * 1.15);
+    EXPECT_LE(high.second, 1.0);
 }
 
 TEST(MixerTest, ResetIsSafeAndDeterministic)

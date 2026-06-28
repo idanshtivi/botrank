@@ -5,7 +5,7 @@
 
 namespace SynthCore {
 
-// 1-pole IIR parameter smoother – no heap allocation, inline state
+// 1-pole IIR parameter smoother - no heap allocation, inline state
 class ParamSmoother {
 public:
     ParamSmoother() = default;
@@ -27,7 +27,7 @@ private:
     double _sampleRate = 44100.0;
 };
 
-// Minimal deterministic RNG – xorshift32 step only.
+// Minimal deterministic RNG - xorshift32 step only.
 // Minimoog-style white/pink noise generation is deferred to the Mixer milestone.
 inline uint32_t xorshift32(uint32_t& state)
 {
@@ -39,7 +39,7 @@ inline uint32_t xorshift32(uint32_t& state)
 
 // Utility math helpers (constexpr-friendly, no dynamic allocation)
 namespace Math {
-    // Fast tanh approximation (Padé [3/3] – < 2.5% error for |x| < 3, sufficient for audio saturation)
+    // Fast tanh approximation (Pade [3/3] - < 2.5% error for |x| < 3, sufficient for audio saturation)
     inline float tanhApprox(float x)
     {
         float x2 = x * x;
@@ -56,7 +56,7 @@ namespace Math {
     }
 }
 
-// Drive-stage utilities — shared across Mixer, LadderFilter, and OutputStage
+// Drive-stage utilities - shared across Mixer, LadderFilter, and OutputStage
 namespace DriveUtils {
 
 inline double clamp01(double x)
@@ -86,7 +86,14 @@ inline double softLimit(double x, double limit)
     return limit * std::tanh(x / limit);
 }
 
-// Asymmetric soft saturator: body/warmth/grit, bounded, no hard clip.
+inline double antiFizz(double input, double shaped, double amount)
+{
+    const double tame = smoothstep01(0.42, 1.0, amount);
+    const double hiDelta = shaped - input;
+    return shaped - (0.10 * tame) * hiDelta * hiDelta * hiDelta;
+}
+
+// Character drive: warm body at low settings, extra edge as the knob rises.
 // amount in [0,1] (use normDrive to convert UI value 0..3).
 // Coefficients are deliberately conservative to avoid inter-oscillator
 // intermodulation products that would create LFO-like pumping.
@@ -94,18 +101,30 @@ inline double mainDriveSaturate(double input, double amount)
 {
     amount = clamp01(amount);
 
-    const double preGain = 1.0 + 5.8 * std::pow(amount, 1.18);
-    const double asym    = 0.030 * amount;   // reduced 3× vs earlier; less rectification
-    const double bias    = 0.010 * amount;
-    const double cubic   = 0.018 * amount;
-
+    const double driveCurve = std::pow(amount, 1.12);
+    const double preGain = 1.0 + 7.2 * driveCurve;
     const double x = input * preGain;
-    const double shapedInput = x + asym * x * x + cubic * x * x * x + bias;
 
-    double y = std::tanh(shapedInput);
-    y -= std::tanh(bias);
+    const double presence = x + (0.055 * amount) * (x - std::tanh(0.72 * x) / 0.72);
+    const double warmLimit = 1.04 - 0.12 * amount;
+    const double warm = warmLimit * std::tanh(presence / warmLimit);
 
-    const double trim = 1.0 / (1.0 + 0.085 * (preGain - 1.0));
+    const double bias = 0.012 * amount;
+    const double asym = 0.026 * amount;
+    const double edgeInput = presence + asym * presence * presence
+                           + (0.030 + 0.060 * amount) * presence * presence * presence
+                           + bias;
+    double edge = std::tanh(edgeInput);
+    edge -= std::tanh(bias);
+
+    const double edgeMix = smoothstep01(0.28, 0.95, amount);
+    double y = lerp(warm, edge, edgeMix);
+
+    const double bodyMix = 0.08 * amount * (1.0 - 0.35 * edgeMix);
+    y = lerp(y, input, bodyMix);
+    y = antiFizz(input, y, amount);
+
+    const double trim = 1.0 / (1.0 + 0.105 * (preGain - 1.0));
     return y * trim;
 }
 
