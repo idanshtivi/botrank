@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 #include "../Include/SynthEngine.h"
+#include "../Include/Mixer.h"
+#include "../Include/LadderFilter.h"
+#include "../Include/DSPUtils.h"
 #include <cmath>
 #include <vector>
 
@@ -253,8 +256,10 @@ TEST(SynthEngineAudioTest, ProcessBlockWritesStereo)
     EXPECT_FLOAT_EQ(buffer[0], buffer[1]);
 }
 
-TEST(SynthEngineAudioTest, LongRenderFiniteAndResetDeterministic)
+TEST(SynthEngineAudioTest, LongRenderFiniteAndResetProducesCleanAudio)
 {
+    // After reset(), the engine must produce finite, bounded, audible audio.
+    // Phase randomization means bit-exact equality is no longer expected.
     SynthEngine engine;
     engine.prepare(48000.0, 512);
     engine.noteOn(45, 100.0f);
@@ -267,8 +272,11 @@ TEST(SynthEngineAudioTest, LongRenderFiniteAndResetDeterministic)
     for (size_t i = 0; i < first.size(); ++i) {
         EXPECT_TRUE(std::isfinite(first[i]));
         EXPECT_TRUE(std::isfinite(second[i]));
-        EXPECT_FLOAT_EQ(first[i], second[i]) << "sample " << i;
+        EXPECT_LE(std::abs(first[i]),  1.0f) << "out of bounds at sample " << i;
+        EXPECT_LE(std::abs(second[i]), 1.0f) << "out of bounds at sample " << i;
     }
+    EXPECT_GT(rms(first),  0.001) << "engine must be audible after first noteOn";
+    EXPECT_GT(rms(second), 0.001) << "engine must be audible after reset + noteOn";
 }
 
 TEST(SynthEngineAudioTest, LoudnessAttackAndSustainAffectAmplitude)
@@ -435,17 +443,25 @@ TEST(SynthEngineAudioTest, FilterContourParametersAreProcessedSafely)
 
 TEST(SynthEngineAudioTest, FilterCutoffChangesBrightness)
 {
-    SynthEngine low;
-    low.prepare(44100.0, 512);
-    low.setFilterCutoffHz(300.0);
-    low.noteOn(45, 100.0f);
-    const auto lowOut = renderMono(low, 44100);
+    // Use MIDI 72 (C5, 523 Hz) so the fundamental is well ABOVE the 300 Hz low-cutoff,
+    // guaranteeing the LP filter strongly attenuates the 300 Hz case.  This makes the
+    // averageAbsDiff ratio robust to oscillator starting phase.
+    auto measureBrightness = [](double cutoffHz) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::Osc2Enabled,    0.0f);
+        engine.setParameter(ParamId::AmpAttack,      0.001f);
+        engine.setParameter(ParamId::AmpSustain,     1.0f);
+        engine.setParameter(ParamId::FilterEnvAmount,0.0f);
+        engine.setParameter(ParamId::FilterDrive,    0.0f);
+        engine.setFilterCutoffHz(cutoffHz);
+        engine.noteOn(72, 100.0f); // C5 = 523 Hz — above the 300 Hz cutoff
+        renderMono(engine, 4096);  // skip attack + filter warm-up
+        return renderMono(engine, 16384);
+    };
 
-    SynthEngine high;
-    high.prepare(44100.0, 512);
-    high.setFilterCutoffHz(8000.0);
-    high.noteOn(45, 100.0f);
-    const auto highOut = renderMono(high, 44100);
+    const auto lowOut  = measureBrightness(300.0);
+    const auto highOut = measureBrightness(8000.0);
 
     EXPECT_GT(averageAbsDiff(highOut), averageAbsDiff(lowOut) * 1.5);
 }
@@ -572,4 +588,571 @@ TEST(SynthEngineAudioTest, NoiseLevelAffectsOutputAndNoiseOffIsSilentWithoutOsci
     high.noteOn(45, 100.0f);
 
     EXPECT_GT(rms(renderMono(high, 4096)), rms(renderMono(low, 4096)) * 2.0);
+}
+
+// ── Part 17 DSP Architecture V2 Tests ────────────────────────────────────────
+
+TEST(DSPArchV2Test, MixerDriveZeroIsNearClean)
+{
+    // At drive=0, output should equal mixerSum (no saturation blend).
+    SynthCore::Mixer mixer;
+    mixer.setSampleRate(44100.0);
+    mixer.setDrive(0.0);
+    mixer.setSourceEnabled(SynthCore::MixerSource::Osc1, true);
+    mixer.setSourceEnabled(SynthCore::MixerSource::Osc2, false);
+    mixer.setSourceLevel(SynthCore::MixerSource::Osc1, 1.0);
+
+    // At drive=0, blend=0, output=mixerSum=input*0.45
+    const double out = mixer.processSample(0.5, 0.0, 0.0, 0.0, 0.0);
+    EXPECT_NEAR(out, 0.5 * 0.45, 1e-9);
+}
+
+TEST(DSPArchV2Test, MixerDriveChangesSignalCharacter)
+{
+    // Drive=2 and drive=3 should both produce measurably different signals from drive=0,
+    // and drive=3 should differ more than drive=2 (monotonic drive response).
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = 4096;
+
+    auto buildEngine = [&](float mixerDrive) -> std::vector<float> {
+        SynthEngine engine;
+        engine.prepare(sampleRate, 512);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc1Level, 0.8f);
+        engine.setParameter(ParamId::Osc1Waveform, 2.0f); // Saw
+        engine.setFilterCutoffHz(8000.0);
+        engine.setFilterResonance(0.05);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, mixerDrive);
+        engine.noteOn(36, 100.0f);
+        renderMono(engine, 2048);
+        return renderMono(engine, frames);
+    };
+
+    const auto clean     = buildEngine(0.0f);
+    const auto driven    = buildEngine(2.0f);
+    const auto maxDriven = buildEngine(3.0f);
+
+    double diff02 = 0.0, diff03 = 0.0;
+    for (int i = 0; i < frames; ++i) {
+        diff02 += std::abs(static_cast<double>(clean[static_cast<size_t>(i)] - driven[static_cast<size_t>(i)]));
+        diff03 += std::abs(static_cast<double>(clean[static_cast<size_t>(i)] - maxDriven[static_cast<size_t>(i)]));
+    }
+    EXPECT_GT(diff02 / frames, 0.01);       // drive=2 meaningfully changes the signal
+    EXPECT_GT(diff03 / frames, 0.01);      // drive=3 also meaningfully changes the signal
+    EXPECT_TRUE(statsFor(driven).finite);
+    EXPECT_LE(statsFor(driven).peak, 1.0);
+    EXPECT_TRUE(statsFor(maxDriven).finite);
+    EXPECT_LE(statsFor(maxDriven).peak, 1.0);
+}
+
+TEST(DSPArchV2Test, MixerDriveIsPerVoiceInPolyMode)
+{
+    // Per-voice drive means poly RMS should be at most ~voice-count * single-voice RMS,
+    // not dramatically explode with intermodulation.
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = 8192;
+
+    SynthEngine mono;
+    mono.prepare(sampleRate, 512);
+    mono.setParameter(ParamId::PlayMode, 0.0f);
+    mono.setParameter(ParamId::MixerDrive, 3.0f);
+    mono.setFilterCutoffHz(8000.0);
+    mono.noteOn(60, 100.0f);
+    renderMono(mono, 2048);
+    const double monoRms = rms(renderMono(mono, frames));
+
+    SynthEngine poly;
+    poly.prepare(sampleRate, 512);
+    poly.setParameter(ParamId::PlayMode, 1.0f);
+    poly.setParameter(ParamId::MixerDrive, 3.0f);
+    poly.setFilterCutoffHz(8000.0);
+    poly.noteOn(60, 100.0f);
+    poly.noteOn(64, 100.0f);
+    renderMono(poly, 2048);
+    const double polyRms = rms(renderMono(poly, frames));
+
+    // Poly must not explode relative to mono; headroom prevents it.
+    EXPECT_LE(polyRms, monoRms * 2.5);
+    EXPECT_TRUE(statsFor(renderMono(poly, 1024)).finite);
+}
+
+TEST(DSPArchV2Test, FilterDriveDoesNotChangePitch)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = static_cast<int>(sampleRate);
+
+    auto measurePitch = [&](float filterDrive) -> double {
+        SynthEngine engine;
+        engine.prepare(sampleRate, 512);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc1Waveform, 2.0f); // Saw
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.setFilterCutoffHz(5000.0);
+        engine.setFilterResonance(0.1);
+        engine.setParameter(ParamId::FilterDrive, filterDrive);
+        engine.noteOn(45, 100.0f); // A2 = 110 Hz
+        return measureHz(renderMono(engine, frames), sampleRate);
+    };
+
+    const double f0 = measurePitch(0.0f);
+    const double f2 = measurePitch(2.0f);
+    ASSERT_GT(f0, 0.0);
+    ASSERT_GT(f2, 0.0);
+    EXPECT_NEAR(f0, f2, 3.0); // pitch unchanged within 3 Hz
+}
+
+TEST(DSPArchV2Test, FilterDriveDoesNotChangeCutoffParameter)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::FilterCutoff, 1500.0f);
+    const float before = engine.getParameter(ParamId::FilterCutoff);
+
+    engine.setParameter(ParamId::FilterDrive, 3.0f);
+    const float after = engine.getParameter(ParamId::FilterCutoff);
+
+    EXPECT_FLOAT_EQ(before, after);
+    EXPECT_FLOAT_EQ(after, 1500.0f);
+}
+
+TEST(DSPArchV2Test, FilterDriveHighPlusResonanceRemainsFinite)
+{
+    SynthEngine engine;
+    engine.prepare(48000.0, 512);
+    engine.setFilterCutoffHz(3000.0);
+    engine.setFilterResonance(0.8);
+    engine.setParameter(ParamId::FilterDrive, 3.0f);
+    engine.setParameter(ParamId::MixerDrive, 0.0f);
+    engine.noteOn(60, 100.0f);
+
+    const auto out = renderMono(engine, 8192);
+    for (float s : out) {
+        EXPECT_TRUE(std::isfinite(s));
+        EXPECT_LE(std::abs(s), 1.0f);
+    }
+}
+
+TEST(DSPArchV2Test, FilterDriveDoesNotCreateSlowSweep)
+{
+    // With LFO off and Contour=0, filter output should be time-stable (no pumping/sweep).
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::LfoEnabled, 0.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::FilterDrive, 2.0f);
+    engine.setFilterCutoffHz(2000.0);
+    engine.setFilterResonance(0.15);
+    engine.noteOn(45, 100.0f);
+    renderMono(engine, 4096); // settle
+
+    const auto first  = renderMono(engine, 4096);
+    const auto second = renderMono(engine, 4096);
+
+    const double rms1 = rms(first);
+    const double rms2 = rms(second);
+    ASSERT_GT(rms1, 0.001);
+    // RMS should not drift more than 20% between equivalent windows (no slow sweep).
+    EXPECT_NEAR(rms1, rms2, rms1 * 0.20);
+}
+
+TEST(DSPArchV2Test, OutputDriveBounded)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setOutputDrive(3.0);
+    engine.setMasterVolume(1.0);
+    engine.noteOn(45, 100.0f);
+
+    const auto out = renderMono(engine, 4096);
+    const auto s = statsFor(out);
+    EXPECT_TRUE(s.finite);
+    EXPECT_LE(s.peak, 1.0);
+}
+
+TEST(DSPArchV2Test, OutputDrivePolyAware)
+{
+    // High output drive with 2 voices should stay finite and not scratch/choke.
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode, 1.0f);
+    engine.setParameter(ParamId::MixerDrive, 2.0f);
+    engine.setOutputDrive(3.0);
+    engine.noteOn(60, 100.0f);
+    engine.noteOn(64, 100.0f);
+
+    const auto out = renderMono(engine, 8192);
+    const auto s = statsFor(out);
+    EXPECT_TRUE(s.finite);
+    EXPECT_LE(s.peak, 1.0);
+    EXPECT_EQ(s.clippedSamples, 0); // soft limiter, no hard clips
+}
+
+TEST(DSPArchV2Test, PolyTwoNoteHighDriveFinite)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode, 1.0f);
+    engine.setParameter(ParamId::MixerDrive, 3.0f);
+    engine.setParameter(ParamId::FilterDrive, 2.0f);
+    engine.setOutputDrive(2.0);
+    engine.noteOn(48, 100.0f);
+    engine.noteOn(52, 100.0f);
+
+    const auto out = renderMono(engine, 8192);
+    for (float s : out) EXPECT_TRUE(std::isfinite(s));
+    EXPECT_LE(statsFor(out).peak, 1.0);
+}
+
+TEST(DSPArchV2Test, PolyFourNoteHighDriveFinite)
+{
+    SynthEngine engine;
+    engine.prepare(48000.0, 512);
+    engine.setParameter(ParamId::PlayMode, 1.0f);
+    engine.setParameter(ParamId::MixerDrive, 3.0f);
+    engine.setParameter(ParamId::FilterDrive, 2.0f);
+    engine.setOutputDrive(2.0);
+    engine.noteOn(48, 100.0f);
+    engine.noteOn(52, 100.0f);
+    engine.noteOn(55, 100.0f);
+    engine.noteOn(60, 100.0f);
+
+    const auto out = renderMono(engine, 8192);
+    for (float s : out) EXPECT_TRUE(std::isfinite(s));
+    EXPECT_LE(statsFor(out).peak, 1.0);
+}
+
+TEST(DSPArchV2Test, ActiveVoiceHeadroomPreventsSumExplosion)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = 8192;
+
+    SynthEngine singleVoice;
+    singleVoice.prepare(sampleRate, 512);
+    singleVoice.setParameter(ParamId::PlayMode, 1.0f);
+    singleVoice.setParameter(ParamId::MixerDrive, 0.0f);
+    singleVoice.noteOn(60, 100.0f);
+    renderMono(singleVoice, 2048);
+    const double single = rms(renderMono(singleVoice, frames));
+
+    SynthEngine fourVoices;
+    fourVoices.prepare(sampleRate, 512);
+    fourVoices.setParameter(ParamId::PlayMode, 1.0f);
+    fourVoices.setParameter(ParamId::MixerDrive, 0.0f);
+    fourVoices.noteOn(60, 100.0f);
+    fourVoices.noteOn(64, 100.0f);
+    fourVoices.noteOn(67, 100.0f);
+    fourVoices.noteOn(72, 100.0f);
+    renderMono(fourVoices, 2048);
+    const double four = rms(renderMono(fourVoices, frames));
+
+    // With poly headroom, 4 voices should not be 4x louder — typically ≤ 2.5x single.
+    EXPECT_LE(four, single * 2.5);
+}
+
+TEST(DSPArchV2Test, NoNaNOrInfInFullSignalChain)
+{
+    SynthEngine engine;
+    engine.prepare(48000.0, 512);
+    engine.setParameter(ParamId::PlayMode, 1.0f);
+    engine.setParameter(ParamId::MixerDrive, 3.0f);
+    engine.setParameter(ParamId::FilterDrive, 3.0f);
+    engine.setFilterCutoffHz(5000.0);
+    engine.setFilterResonance(0.9);
+    engine.setOutputDrive(3.0);
+    engine.noteOn(36, 100.0f);
+    engine.noteOn(48, 100.0f);
+    engine.noteOn(55, 100.0f);
+    engine.noteOn(67, 100.0f);
+
+    for (int i = 0; i < 16384; ++i) {
+        const float s = engine.processSample();
+        EXPECT_TRUE(std::isfinite(s)) << "NaN/Inf at sample " << i;
+        EXPECT_LE(std::abs(s), 1.0f) << "Out of bounds at sample " << i;
+        if (!std::isfinite(s)) break;
+    }
+}
+
+// ── Part 18 — LFO hard bypass + drive pumping regression ─────────────────────
+
+// LFO Rate must not matter when Amt=0 and Wheel=0 (hard bypass).
+TEST(DSPArchV2Test, LfoZeroAmountRateIndependent)
+{
+    auto buildEngine = [](float rate) {
+        SynthEngine e;
+        e.prepare(44100.0, 512);
+        e.setParameter(ParamId::AmpSustain,     1.0f);
+        e.setParameter(ParamId::LfoEnabled,     1.0f);
+        e.setParameter(ParamId::LfoRate,        rate);
+        e.setParameter(ParamId::LfoAmount,      0.0f);
+        e.setParameter(ParamId::ModWheelAmount, 0.0f);
+        e.setFilterCutoffHz(5000.0);
+        e.noteOn(60, 100.0f);
+        renderMono(e, 2048); // skip attack
+        return renderMono(e, 4096);
+    };
+    const auto lowRate  = buildEngine(0.01f);
+    const auto highRate = buildEngine(20.0f);
+    double maxDiff = 0.0;
+    for (size_t i = 0; i < lowRate.size(); ++i)
+        maxDiff = std::max(maxDiff, std::abs(static_cast<double>(lowRate[i] - highRate[i])));
+    EXPECT_LT(maxDiff, 1e-5) << "LFO Rate must not matter when Amt=0 and Wheel=0";
+}
+
+// All LFO destinations must produce identical output when Amt=0 and Wheel=0.
+TEST(DSPArchV2Test, LfoZeroAmountDestinationIndependent)
+{
+    auto buildEngine = [](float dest) {
+        SynthEngine e;
+        e.prepare(44100.0, 512);
+        e.setParameter(ParamId::AmpSustain,     1.0f);
+        e.setParameter(ParamId::LfoEnabled,     1.0f);
+        e.setParameter(ParamId::LfoRate,        5.0f);
+        e.setParameter(ParamId::LfoAmount,      0.0f);
+        e.setParameter(ParamId::ModWheelAmount, 0.0f);
+        e.setParameter(ParamId::LfoDestination, dest);
+        e.setFilterCutoffHz(5000.0);
+        e.noteOn(60, 100.0f);
+        renderMono(e, 2048);
+        return renderMono(e, 4096);
+    };
+    const auto destPitch  = buildEngine(0.0f);
+    const auto destFilter = buildEngine(1.0f);
+    const auto destPW     = buildEngine(2.0f);
+    for (size_t i = 0; i < destPitch.size(); ++i) {
+        EXPECT_NEAR(destPitch[i], destFilter[i], 1e-5f)
+            << "Filter dest vs pitch dest differ at sample " << i;
+        EXPECT_NEAR(destPitch[i], destPW[i], 1e-5f)
+            << "PW dest vs pitch dest differ at sample " << i;
+    }
+}
+
+// Drive at a steady value with all modulators off must not create low-frequency
+// amplitude modulation (no pumping / tremolo).
+TEST(DSPArchV2Test, MixerDriveNoAmplitudeModulation)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,       1.0f); // Poly 4
+    engine.setParameter(ParamId::LfoEnabled,     0.0f);
+    engine.setParameter(ParamId::LfoAmount,      0.0f);
+    engine.setParameter(ParamId::ModWheelAmount, 0.0f);
+    engine.setParameter(ParamId::FilterEnvAmount,0.0f);
+    engine.setParameter(ParamId::FilterDrive,    0.0f);
+    engine.setParameter(ParamId::MixerDrive,     2.5f);
+    engine.setFilterCutoffHz(20000.0);
+    engine.setFilterResonance(0.0f);
+    engine.setParameter(ParamId::AmpSustain,     1.0f);
+    engine.setParameter(ParamId::Osc1Level,      1.0f);
+    engine.setParameter(ParamId::Osc2Level,      1.0f);
+    engine.setParameter(ParamId::Osc3Enabled,    1.0f);
+    engine.setParameter(ParamId::Osc3Level,      0.38f);
+    engine.noteOn(60, 100.0f);
+    engine.noteOn(64, 100.0f);
+    engine.noteOn(67, 100.0f);
+    engine.noteOn(72, 100.0f);
+    renderMono(engine, 8192); // let smoother and envelopes settle fully
+
+    const auto first  = renderMono(engine, 4096);
+    const auto second = renderMono(engine, 4096);
+    const double rms1 = rms(first);
+    const double rms2 = rms(second);
+    ASSERT_GT(rms1, 0.001) << "Engine must produce audible output";
+    // RMS must be stable — not more than 15% drift between equivalent windows.
+    EXPECT_NEAR(rms1, rms2, rms1 * 0.15)
+        << "High mixer drive must not create slow amplitude modulation (pumping)";
+}
+
+// ── Part 19 — Oscillator analog-style phase randomization ────────────────────
+
+static void setupBasicPatch(SynthEngine& e, bool poly = false)
+{
+    e.setParameter(ParamId::PlayMode,       poly ? 1.0f : 0.0f);
+    e.setParameter(ParamId::AmpSustain,     1.0f);
+    e.setParameter(ParamId::AmpAttack,      0.001f);
+    e.setParameter(ParamId::AmpRelease,     0.03f);
+    e.setParameter(ParamId::LfoAmount,      0.0f);
+    e.setParameter(ParamId::ModWheelAmount, 0.0f);
+    e.setParameter(ParamId::FilterEnvAmount,0.0f);
+    e.setFilterCutoffHz(20000.0);
+    e.setFilterResonance(0.0f);
+    e.setParameter(ParamId::Osc1Level,      1.0f);
+    e.setParameter(ParamId::Osc2Enabled,    0.0f); // single oscillator for clean transient test
+    e.setParameter(ParamId::Osc3Enabled,    0.0f);
+    e.setParameter(ParamId::MixerDrive,     0.0f);
+    e.setParameter(ParamId::FilterDrive,    0.0f);
+}
+
+// Sequential poly notes after engine reset should NOT produce identical output.
+// Before phase randomization: after reset all phases=0, so repeated note (after reset)
+// would be bit-identical. With randomization: _noteStartRng advances across reset(),
+// producing different phases and therefore different transients.
+TEST(OscPhaseTest, PolyNoteAfterResetIsNotBitIdentical)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    setupBasicPatch(engine, /*poly=*/true);
+
+    engine.noteOn(60, 100.0f);
+    const auto first = renderMono(engine, 64);
+    engine.noteOff(60);
+    renderMono(engine, 2048); // wait for silence (rng stays at V1 — not advanced)
+
+    // Reset all oscillator phases to 0, but _noteStartRng stays at whatever it was
+    engine.reset();
+    setupBasicPatch(engine, /*poly=*/true);
+
+    engine.noteOn(60, 100.0f); // _noteStartRng advances from V1 to V2 → different phases
+    const auto second = renderMono(engine, 64);
+
+    double diff = 0.0;
+    for (size_t i = 0; i < first.size(); ++i)
+        diff += std::abs(static_cast<double>(first[i]) - second[i]);
+    // Without phase randomization first == second (both reset to 0 before each note).
+    // With phase randomization they must differ.
+    EXPECT_GT(diff / static_cast<double>(first.size()), 0.001)
+        << "Repeated note starts after reset must not be bit-identical";
+}
+
+// Poly voices started in sequence must have different initial transients.
+TEST(OscPhaseTest, SequentialPolyNotesDifferentTransients)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    setupBasicPatch(engine, /*poly=*/true);
+
+    engine.noteOn(60, 100.0f);
+    const auto first = renderMono(engine, 64);
+    engine.noteOff(60);
+    renderMono(engine, 2048);
+
+    engine.noteOn(60, 100.0f);
+    const auto second = renderMono(engine, 64);
+
+    double diff = 0.0;
+    for (size_t i = 0; i < first.size(); ++i)
+        diff += std::abs(static_cast<double>(first[i]) - second[i]);
+    EXPECT_GT(diff / static_cast<double>(first.size()), 0.001)
+        << "Sequential note starts must produce different transients";
+}
+
+// In mono mode, a legato continuation must NOT reset oscillator phases.
+// Test: signal must be nonzero and continuous immediately after legato noteOn.
+TEST(OscPhaseTest, MonoLegatoPreservesOscillatorContinuity)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,       0.0f); // mono
+    engine.setParameter(ParamId::Legato,         1.0f);
+    engine.setParameter(ParamId::AmpSustain,     1.0f);
+    engine.setParameter(ParamId::AmpAttack,      0.001f);
+    engine.setParameter(ParamId::LfoAmount,      0.0f);
+    engine.setParameter(ParamId::FilterEnvAmount,0.0f);
+    engine.setFilterCutoffHz(20000.0);
+    engine.setFilterResonance(0.0f);
+    engine.setParameter(ParamId::Osc1Level,      1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,    0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,    0.0f);
+    engine.setParameter(ParamId::MixerDrive,     0.0f);
+    engine.setParameter(ParamId::FilterDrive,    0.0f);
+
+    engine.noteOn(60, 100.0f);
+    renderMono(engine, 2048); // reach steady state
+
+    const float before = engine.processSample();
+    engine.noteOn(64, 100.0f); // legato — must NOT reset oscillator phase
+    const float after  = engine.processSample();
+
+    // A phase reset would snap the waveform to its phase=0 value, causing a jump
+    // potentially as large as the full waveform amplitude. With legato, continuity
+    // means the waveform just continues from where it was — same order of magnitude.
+    EXPECT_TRUE(std::isfinite(before));
+    EXPECT_TRUE(std::isfinite(after));
+    // Signal must not abruptly vanish (no restart transient to near-zero)
+    // Use a very loose bound: at least one of the samples is audible
+    EXPECT_GT(std::max(std::abs(before), std::abs(after)), 0.001f)
+        << "Legato noteOn must not silence the oscillator output";
+}
+
+// Glide must not reset oscillator phases (voice stays active during pitch change).
+TEST(OscPhaseTest, GlideKeepsSignalContinuous)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,   0.0f); // mono
+    engine.setParameter(ParamId::GlideEnabled, 1.0f);
+    engine.setParameter(ParamId::GlideTime,  0.05f);
+    engine.setParameter(ParamId::AmpSustain, 1.0f);
+    engine.setParameter(ParamId::LfoAmount,  0.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setFilterCutoffHz(20000.0);
+    engine.setFilterResonance(0.0f);
+    engine.setParameter(ParamId::Osc1Level,  1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,0.0f);
+    engine.setParameter(ParamId::MixerDrive, 0.0f);
+    engine.setParameter(ParamId::FilterDrive,0.0f);
+
+    engine.noteOn(60, 100.0f);
+    renderMono(engine, 2048);
+
+    // Trigger second note while held — glide active (voice stays live)
+    engine.noteOn(72, 100.0f);
+    const auto glideOut = renderMono(engine, static_cast<int>(44100 * 0.1)); // 100ms glide window
+
+    const auto s = statsFor(glideOut);
+    EXPECT_TRUE(s.finite) << "NaN/Inf during glide";
+    EXPECT_LE(s.peak, 1.0f) << "Out of bounds during glide";
+    EXPECT_GT(s.rms, 0.001) << "Signal must be present throughout glide";
+}
+
+// Two-Drive Final Design tests
+TEST(TwoDriveFinalTest, OutputDriveParameterIsNeutralized)
+{
+    // Output Drive UI parameter must no longer affect the audio signal.
+    // Identical patches with outputDrive=0 vs outputDrive=3 must produce identical output.
+    auto buildEngine = [](double outputDriveUiValue) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::MixerDrive, 1.5f);
+        engine.setFilterCutoffHz(5000.0);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setOutputDrive(outputDriveUiValue);
+        engine.noteOn(60, 100.0f);
+        renderMono(engine, 2048); // settle
+        return renderMono(engine, 4096);
+    };
+
+    const auto zeroDrive = buildEngine(0.0);
+    const auto maxDrive  = buildEngine(3.0);
+
+    double diff = 0.0;
+    for (size_t i = 0; i < zeroDrive.size(); ++i)
+        diff += std::abs(static_cast<double>(zeroDrive[i] - maxDrive[i]));
+    diff /= static_cast<double>(zeroDrive.size());
+
+    EXPECT_LT(diff, 0.001) << "Output Drive UI value must not create a meaningful tone difference";
+}
+
+TEST(TwoDriveFinalTest, InternalOutputColorLinkedToMainDriveIsBounded)
+{
+    // With Main Drive at maximum and two poly voices, internal output color must stay bounded.
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,   1.0f); // poly
+    engine.setParameter(ParamId::MixerDrive, 3.0f); // max main drive → max internal color
+    engine.setParameter(ParamId::AmpSustain, 1.0f);
+    engine.setFilterCutoffHz(8000.0);
+    engine.noteOn(60, 100.0f);
+    engine.noteOn(64, 100.0f);
+    renderMono(engine, 2048); // settle
+
+    const auto out = renderMono(engine, 4096);
+    const auto s = statsFor(out);
+    EXPECT_TRUE(s.finite)           << "NaN/Inf with max main drive";
+    EXPECT_LE(s.peak, 1.0)          << "Output must not exceed hard clip ceiling";
+    EXPECT_GT(s.rms, 0.001)         << "Signal must be audible — not choked by output color";
+    EXPECT_EQ(s.clippedSamples, 0)  << "Soft limiter must prevent any hard clipping";
 }

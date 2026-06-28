@@ -44,6 +44,7 @@ public:
     float processSample();
     float process();
 
+    void setPhase(double phase); // set phase in [0,1) — used for analog-style phase starts
     void reset();
 
 private:

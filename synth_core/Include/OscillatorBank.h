@@ -23,6 +23,7 @@ public:
     void setOscillatorPulseWidth(int oscIndex, double width);
     void setOscillator3KeyboardTrackingEnabled(bool enabled);
     void setAnalogDrift(double maxCents);
+    void randomizePhases(uint32_t seed); // set independent random start phase per oscillator
     void reset();
     OscillatorBankOutput process();
 

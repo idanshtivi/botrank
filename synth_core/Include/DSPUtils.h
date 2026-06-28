@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <cmath>
+#include <algorithm>
 
 namespace SynthCore {
 
@@ -53,5 +55,60 @@ namespace Math {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 }
+
+// Drive-stage utilities — shared across Mixer, LadderFilter, and OutputStage
+namespace DriveUtils {
+
+inline double clamp01(double x)
+{
+    return std::max(0.0, std::min(1.0, x));
+}
+
+inline double normDrive(double uiValue)
+{
+    return clamp01(uiValue / 3.0);
+}
+
+inline double smoothstep01(double edge0, double edge1, double x)
+{
+    const double t = clamp01((x - edge0) / (edge1 - edge0));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+inline double lerp(double a, double b, double t)
+{
+    return a + (b - a) * t;
+}
+
+inline double softLimit(double x, double limit)
+{
+    limit = std::max(0.1, limit);
+    return limit * std::tanh(x / limit);
+}
+
+// Asymmetric soft saturator: body/warmth/grit, bounded, no hard clip.
+// amount in [0,1] (use normDrive to convert UI value 0..3).
+// Coefficients are deliberately conservative to avoid inter-oscillator
+// intermodulation products that would create LFO-like pumping.
+inline double mainDriveSaturate(double input, double amount)
+{
+    amount = clamp01(amount);
+
+    const double preGain = 1.0 + 5.8 * std::pow(amount, 1.18);
+    const double asym    = 0.030 * amount;   // reduced 3× vs earlier; less rectification
+    const double bias    = 0.010 * amount;
+    const double cubic   = 0.018 * amount;
+
+    const double x = input * preGain;
+    const double shapedInput = x + asym * x * x + cubic * x * x * x + bias;
+
+    double y = std::tanh(shapedInput);
+    y -= std::tanh(bias);
+
+    const double trim = 1.0 / (1.0 + 0.085 * (preGain - 1.0));
+    return y * trim;
+}
+
+} // namespace DriveUtils
 
 } // namespace SynthCore

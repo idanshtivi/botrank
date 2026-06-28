@@ -69,6 +69,18 @@ void OscillatorBank::setAnalogDrift(double maxCents)
     }
 }
 
+void OscillatorBank::randomizePhases(uint32_t seed)
+{
+    // Three xorshift32 steps give three independent phase values in [0,1).
+    auto step = [](uint32_t& s) -> double {
+        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+        return static_cast<double>(s & 0x7FFFFFFFu) * (1.0 / 2147483648.0);
+    };
+    _osc1.setPhase(step(seed));
+    _osc2.setPhase(step(seed));
+    _osc3.setPhase(step(seed));
+}
+
 void OscillatorBank::reset()
 {
     _osc1.reset();

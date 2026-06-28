@@ -116,8 +116,9 @@ TEST(LfoTest, PitchLfoCreatesPeriodicVariation)
     for (int i = 0; i < halfCycle; ++i) sum2 += e.processSample();
 
     EXPECT_NE(sum1, sum2) << "LFO pitch must create asymmetric periods";
-    // Also verify the difference is substantial, not floating-point noise
-    EXPECT_GT(std::abs(sum1 - sum2), 1.0)
+    // Verify the difference is substantial, not floating-point noise.
+    // Threshold updated for corrected gain staging (drive=1 no longer boosts signal).
+    EXPECT_GT(std::abs(sum1 - sum2), 0.10)
         << "Half-cycle sums should differ meaningfully with 1.0 amount";
 }
 

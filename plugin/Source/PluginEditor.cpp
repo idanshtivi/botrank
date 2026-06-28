@@ -255,7 +255,10 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
 
     // OUTPUT — sliders[27..28]
     addKnob("Volume", "masterVolume");           // sliders[27]
-    addKnob("Output Drive", "outputDrive");      // sliders[28]
+    auto& outputDriveKnob = addKnob("Output Drive", "outputDrive"); // sliders[28], hidden for state compatibility
+    outputDriveKnob.setVisible(false);
+    if (auto it = attachedLabels.find(&outputDriveKnob); it != attachedLabels.end() && it->second != nullptr)
+        it->second->setVisible(false);
 
     // Preset strip (UI shell only — no real preset storage)
     auto stylePresetBtn = [](juce::TextButton& btn, const juce::String& text) {
@@ -665,10 +668,9 @@ void LadderVoiceAudioProcessorEditor::resized()
     setComponentBounds(sliders, s, {1262, 506, 76,  78});      // [s26] loudnessRelease
 
     // OUTPUT — section {800,360,150,230}
-    // masterVolume: knobBox 144×86 → render 86px, large strip (144≥100) ✓
-    // outputDrive:  knobBox 132×64 → render 64px, large strip (132≥100) ✓
-    setComponentBounds(sliders, s, {804, 408, 142,  96});      // [s27] masterVolume
-    setComponentBounds(sliders, s, {824, 528, 102,  56});      // [s28] outputDrive
+    // Volume is the only visible control — centered vertically in the section content area.
+    setComponentBounds(sliders, s, {804, 444, 142,  96});      // [s27] masterVolume — centered
+    setComponentBounds(sliders, s, {0, 0, 0, 0});               // [s28] outputDrive hidden, APVTS kept
 
     // Preset strip
     presetPrevButton.setBounds(752, 42, 28, 26);

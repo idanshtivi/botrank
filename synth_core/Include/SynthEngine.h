@@ -184,6 +184,7 @@ private:
     std::array<bool, kPolyVoiceCount> _polyHeld {};
     std::array<uint64_t, kPolyVoiceCount> _polyAges {};
     uint64_t        _voiceAgeCounter = 0;
+    uint32_t        _noteStartRng    = 0x52B7E151u; // persists across reset() for variety
     int             _playMode = 0;
     double          _pitchBendSemitones = 0.0;
     Lfo             _lfo;

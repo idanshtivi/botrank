@@ -1,4 +1,5 @@
 #include "../Include/LadderFilter.h"
+#include "../Include/DSPUtils.h"
 #include <algorithm>
 #include <cmath>
 
@@ -40,7 +41,7 @@ void LadderFilter::setKeyboardTrackingAmount(double amount)
 void LadderFilter::setDrive(double drive)
 {
     if (!std::isfinite(drive)) drive = 0.0;
-    _drive = std::clamp(drive, 0.0, 4.0);
+    _drive = std::clamp(drive, 0.0, 3.0);
 }
 
 void LadderFilter::reset()
@@ -63,9 +64,13 @@ double LadderFilter::_effectiveCutoff(double filterEnvelopeValue, double keyboar
 double LadderFilter::processSample(double input, double filterEnvelopeValue, double keyboardMidiNote)
 {
     double x = std::isfinite(input) ? input : 0.0;
-    if (_drive > 0.0001) {
-        const double driveScale = 1.0 + _drive * 2.0;
-        x = std::tanh(x * driveScale) / std::tanh(driveScale);
+
+    // Stable filter input push — no feedbackReturn, no sweep, no self-oscillation change.
+    const double fd = DriveUtils::normDrive(_drive);
+    if (fd > 0.001) {
+        const double inputGain  = 1.0 + 2.8 * std::pow(fd, 1.20);
+        const double filterInput = x * inputGain;
+        x = DriveUtils::mainDriveSaturate(filterInput, 0.55 * fd);
     }
 
     const double cutoff = _effectiveCutoff(filterEnvelopeValue, keyboardMidiNote);

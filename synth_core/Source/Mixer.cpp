@@ -1,4 +1,5 @@
 #include "../Include/Mixer.h"
+#include "../Include/DSPUtils.h"
 #include <algorithm>
 #include <cmath>
 
@@ -13,6 +14,9 @@ int Mixer::_index(MixerSource source)
 void Mixer::setSampleRate(double sampleRate)
 {
     _sampleRate = (std::isfinite(sampleRate) && sampleRate > 0.0) ? sampleRate : 44100.0;
+    constexpr double kDriveTau = 0.020; // 20 ms — fast enough to not feel laggy
+    _driveAlpha    = std::exp(-1.0 / (kDriveTau * _sampleRate));
+    _driveNeedsSnap = true; // re-snap on next processSample so new drive takes effect cleanly
 }
 
 void Mixer::setSourceEnabled(MixerSource source, bool enabled)
@@ -28,12 +32,13 @@ void Mixer::setSourceLevel(MixerSource source, double level)
 
 void Mixer::setDrive(double drive)
 {
-    if (!std::isfinite(drive)) drive = 1.6;
-    _drive = std::clamp(drive, 0.0, 8.0);
+    if (!std::isfinite(drive)) drive = 1.0;
+    _drive = std::clamp(drive, 0.0, 3.0);
 }
 
 void Mixer::reset()
 {
+    _driveNeedsSnap = true; // next processSample will snap to the post-reset _drive value
 }
 
 double Mixer::processSample(double osc1, double osc2, double osc3, double noise, double ext)
@@ -49,12 +54,21 @@ double Mixer::processSample(double osc1, double osc2, double osc3, double noise,
     }
 
     constexpr double headroom = 0.45;
-    const double x = sum * headroom;
-    double out = x;
-    if (_drive > 0.0001) {
-        const double denom = std::tanh(_drive);
-        out = denom > 0.0001 ? std::tanh(_drive * x) / denom : x;
+    const double mixerSum = sum * headroom;
+
+    // Snap on first call after init/reset so pre-play parameter changes take effect
+    // immediately.  During playback (subsequent calls) use the 1-pole LP to avoid
+    // zipper noise when the drive knob is turned.
+    if (_driveNeedsSnap) {
+        _driveSmoothed  = _drive;
+        _driveNeedsSnap = false;
+    } else {
+        _driveSmoothed = _driveAlpha * _driveSmoothed + (1.0 - _driveAlpha) * _drive;
     }
+    const double md       = DriveUtils::normDrive(_driveSmoothed);
+    const double driven   = DriveUtils::mainDriveSaturate(mixerSum, md);
+    const double driveMix = DriveUtils::smoothstep01(0.04, 0.78, md);
+    double out = DriveUtils::lerp(mixerSum, driven, driveMix);
 
     if (!std::isfinite(out)) out = 0.0;
     return std::clamp(out, -1.0, 1.0);

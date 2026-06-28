@@ -187,6 +187,14 @@ float Oscillator::process()
     return processSample();
 }
 
+void Oscillator::setPhase(double phase)
+{
+    _phase = phase - std::floor(phase); // wrap to [0,1)
+    // Seed the triangle integrator at the ideal value to reduce the startup click.
+    const double tri = (_phase < 0.5) ? (4.0 * _phase - 1.0) : (3.0 - 4.0 * _phase);
+    _triangleState = tri;
+}
+
 void Oscillator::reset()
 {
     _phase = 0.0;

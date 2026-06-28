@@ -1,4 +1,5 @@
 #include "../Include/OutputStage.h"
+#include "../Include/DSPUtils.h"
 #include <algorithm>
 #include <cmath>
 
@@ -21,7 +22,14 @@ void OutputStage::setMasterVolume(double volume)
 void OutputStage::setDrive(double drive)
 {
     if (!std::isfinite(drive)) drive = 0.0;
-    _drive = std::clamp(drive, 0.0, 4.0);
+    _drive = std::clamp(drive, 0.0, 3.0);
+    // _drive is stored for APVTS/preset compatibility but no longer used in DSP.
+}
+
+void OutputStage::setMainDriveLink(double mainDriveUiValue)
+{
+    if (!std::isfinite(mainDriveUiValue)) mainDriveUiValue = 0.0;
+    _mainDriveLink = std::clamp(mainDriveUiValue, 0.0, 3.0);
 }
 
 void OutputStage::setReferenceToneEnabled(bool enabled)
@@ -52,12 +60,18 @@ double OutputStage::processSample(double input)
     _dcPrevOutput = dcBlocked;
 
     double out = dcBlocked;
-    if (_drive > 0.0001) {
-        const double denom = std::tanh(_drive);
-        out = denom > 0.0001 ? std::tanh(_drive * out) / denom : out;
-    }
 
-    out = std::tanh(out);
+    // Internal output color — linked to Main Drive, not user-controlled.
+    // Keeps the output alive and cohesive as drive increases; stays very subtle.
+    const double mainDriveNorm = DriveUtils::normDrive(_mainDriveLink);
+    const double colorAmt      = 0.025 + 0.055 * DriveUtils::smoothstep01(0.20, 1.0, mainDriveNorm);
+    const double colored       = DriveUtils::mainDriveSaturate(out, colorAmt);
+    const double colorMix      = 0.08  + 0.10  * DriveUtils::smoothstep01(0.35, 1.0, mainDriveNorm);
+    out = DriveUtils::lerp(out, colored, colorMix);
+
+    // Safety limiter — should rarely activate under correct gain staging.
+    out = DriveUtils::softLimit(out, 0.98);
+
     if (!std::isfinite(out)) out = 0.0;
     return std::clamp(out, -1.0, 1.0);
 }

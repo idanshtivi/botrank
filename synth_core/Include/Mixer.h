@@ -30,10 +30,13 @@ public:
     float process(float osc1, float osc2, float osc3, float noise, float ext);
 
 private:
-    double _sampleRate = 44100.0;
+    double _sampleRate    = 44100.0;
     double _levels[static_cast<int>(MixerSource::Count)] = {0.7, 0.4, 0.0, 0.0, 0.0};
-    bool _enabled[static_cast<int>(MixerSource::Count)] = {true, true, false, false, false};
-    double _drive = 1.6;
+    bool   _enabled[static_cast<int>(MixerSource::Count)] = {true, true, false, false, false};
+    double _drive           = 1.0;
+    double _driveSmoothed   = 1.0;  // 1-pole LP toward _drive; eliminates zipper noise
+    double _driveAlpha      = 0.0;  // coefficient = exp(-1/(tau*fs))
+    bool   _driveNeedsSnap  = true; // snap on first processSample after init/reset
 
     static int _index(MixerSource source);
 };

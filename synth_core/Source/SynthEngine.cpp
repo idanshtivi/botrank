@@ -264,6 +264,10 @@ void SynthEngine::_applyParameter(ParamId id, float value)
         _voiceCtrl.setNotePriority(static_cast<VoiceController::NotePriority>(
             std::clamp(static_cast<int>(std::lround(static_cast<double>(value))), 0, 2)));
         break;
+    case ParamId::MixerDrive:
+        _applyParameterToAllVoices(id, value);
+        _output.setMainDriveLink(value); // internal output color tracks Main Drive
+        break;
     default:
         _applyParameterToAllVoices(id, value);
         break;
@@ -300,11 +304,26 @@ void SynthEngine::setModWheel(double position)
     _modWheelPosition = std::clamp(position, 0.0, 1.0);
 }
 
+static void advanceRng(uint32_t& s)
+{
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+}
+
 void SynthEngine::noteOn(int midiNote, float velocity)
 {
     if (_playMode == 0) {
+        // Legato: if voice was already active and legato param is on, preserve phase.
+        // Fresh starts and retriggers get randomized phases for analog character.
+        const bool isLegato = _synthVoice.isActive() &&
+                              (_params[static_cast<int>(ParamId::Legato)] >= 0.5f);
         _voiceCtrl.noteOn(midiNote, velocity);
         _synthVoice.noteOn(midiNote, velocity);
+        if (!isLegato) {
+            advanceRng(_noteStartRng);
+            const uint32_t seed = _noteStartRng
+                ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
+            _synthVoice.oscillators.randomizePhases(seed);
+        }
         return;
     }
 
@@ -312,6 +331,14 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     _polyMidiNotes[static_cast<size_t>(voiceIndex)] = std::clamp(midiNote, 0, 127);
     _polyHeld[static_cast<size_t>(voiceIndex)] = true;
     _polyAges[static_cast<size_t>(voiceIndex)] = ++_voiceAgeCounter;
+
+    // Each new poly note gets independent random starting phases for all 3 oscillators.
+    advanceRng(_noteStartRng);
+    const uint32_t seed = _noteStartRng
+        ^ (static_cast<uint32_t>(voiceIndex + 1) * 2654435761u)
+        ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
+    _polyVoices[static_cast<size_t>(voiceIndex)].oscillators.randomizePhases(seed);
+
     _polyVoices[static_cast<size_t>(voiceIndex)].noteOn(midiNote, velocity);
 }
 
@@ -468,30 +495,37 @@ float SynthEngine::processSample()
     // The visible Mod Wheel knob is a standalone extra depth in the standalone app.
     // MIDI CC1 can still push the same depth harder while never blocking base LFO amount.
     const double totalDepth = std::clamp(lfoAmt + mwAmt + (mwAmt * _modWheelPosition), 0.0, 1.0);
-    const double lfoValue   = lfoOn ? totalDepth * lfoRaw : 0.0;
+
+    // Hard bypass: when both LFO amount and wheel depth are zero, skip ALL modulation.
+    // This guarantees that rate, destination, and LFO phase cannot create any audible
+    // effect even if LfoEnabled is left on by the host or the standalone initialiser.
+    const bool   lfoActive  = lfoOn && (totalDepth > 1.0e-5);
+    const double lfoValue   = lfoActive ? totalDepth * lfoRaw : 0.0;
     const int    lfoDest    = static_cast<int>(std::lround(
                                   static_cast<double>(_params[static_cast<int>(ParamId::LfoDestination)])));
 
-    // Dest 1 — Filter: modulate cutoff logarithmically (±3 octaves at full depth)
-    if (lfoDest == 1) {
-        const double base    = static_cast<double>(_params[static_cast<int>(ParamId::FilterCutoff)]);
-        const double modFreq = std::clamp(base * std::pow(2.0, lfoValue * 3.0), 20.0, 20000.0);
-        _synthVoice.ladderFilter.setCutoffHz(modFreq);
-        for (auto& voice : _polyVoices)
-            voice.ladderFilter.setCutoffHz(modFreq);
-    }
-    // Dest 2 — Pulse Width (square/pulse waveforms only)
-    else if (lfoDest == 2) {
-        const double pw = std::clamp(0.5 + lfoValue * 0.4, 0.10, 0.90);
-        for (int osc = 1; osc <= 3; ++osc) {
-            _synthVoice.oscillators.setOscillatorPulseWidth(osc, pw);
+    if (lfoActive) {
+        // Dest 1 — Filter: modulate cutoff logarithmically (±3 octaves at full depth)
+        if (lfoDest == 1) {
+            const double base    = static_cast<double>(_params[static_cast<int>(ParamId::FilterCutoff)]);
+            const double modFreq = std::clamp(base * std::pow(2.0, lfoValue * 3.0), 20.0, 20000.0);
+            _synthVoice.ladderFilter.setCutoffHz(modFreq);
             for (auto& voice : _polyVoices)
-                voice.oscillators.setOscillatorPulseWidth(osc, pw);
+                voice.ladderFilter.setCutoffHz(modFreq);
+        }
+        // Dest 2 — Pulse Width (square/pulse waveforms only)
+        else if (lfoDest == 2) {
+            const double pw = std::clamp(0.5 + lfoValue * 0.4, 0.10, 0.90);
+            for (int osc = 1; osc <= 3; ++osc) {
+                _synthVoice.oscillators.setOscillatorPulseWidth(osc, pw);
+                for (auto& voice : _polyVoices)
+                    voice.oscillators.setOscillatorPulseWidth(osc, pw);
+            }
         }
     }
 
     // Dest 0 — Pitch: ±12 semitones at full depth, applied per voice below
-    const double lfoPitchSemitones = (lfoDest == 0) ? lfoValue * 12.0 : 0.0;
+    const double lfoPitchSemitones = (lfoActive && lfoDest == 0) ? lfoValue * 12.0 : 0.0;
 
     // ── Voice rendering ───────────────────────────────────────────────────────
     float voiceSample = 0.0f;
@@ -502,6 +536,7 @@ float SynthEngine::processSample()
             hz *= std::pow(2.0, lfoPitchSemitones / 12.0);
         voiceSample = _synthVoice.processSample(hz, _voiceCtrl.getCurrentMidiNote());
     } else {
+        int activeCount = 0;
         for (size_t i = 0; i < _polyVoices.size(); ++i) {
             if (_polyHeld[i] || _polyVoices[i].isActive()) {
                 const double midiNote = static_cast<double>(_polyMidiNotes[i]);
@@ -509,9 +544,13 @@ float SynthEngine::processSample()
                 if (lfoDest == 0)
                     hz *= std::pow(2.0, lfoPitchSemitones / 12.0);
                 voiceSample += _polyVoices[i].processSample(hz, midiNote);
+                ++activeCount;
             }
         }
-        voiceSample *= 0.5f;
+        // Dynamic poly headroom: prevents post-sum intermodulation from exploding.
+        const int n = std::max(1, activeCount);
+        const float polyHeadroom = 1.0f / (1.0f + 0.25f * static_cast<float>(n - 1));
+        voiceSample *= polyHeadroom;
     }
 
     double out = _output.processSample(voiceSample);
