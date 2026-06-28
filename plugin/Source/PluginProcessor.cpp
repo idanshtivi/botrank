@@ -110,6 +110,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
         });
 
     juce::NormalisableRange<float> unitRange(0.0f, 1.0f, 0.01f);
+    juce::NormalisableRange<float> levelRange(0.0f, 1.0f, 0.001f);
     juce::NormalisableRange<float> driveRange(0.0f, 3.0f, 0.01f);
     juce::NormalisableRange<float> attackRange(0.001f, 10.0f);
     attackRange.setSkewForCentre(0.05f);
@@ -124,9 +125,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
     glideRange.setSkewForCentre(0.25f);
     glideRange.interval = 0.001f;
 
-    floatParam("osc1Level", "Osc 1 Level", unitRange, def(SynthCore::ParamId::Osc1Level), twoDecimals);
-    floatParam("osc2Level", "Osc 2 Level", unitRange, def(SynthCore::ParamId::Osc2Level), twoDecimals);
-    floatParam("osc3Level", "Osc 3 Level", unitRange, def(SynthCore::ParamId::Osc3Level), twoDecimals);
+    floatParam("osc1Level", "Osc 1 Level", levelRange, def(SynthCore::ParamId::Osc1Level), twoDecimals);
+    floatParam("osc2Level", "Osc 2 Level", levelRange, def(SynthCore::ParamId::Osc2Level), twoDecimals);
+    floatParam("osc3Level", "Osc 3 Level", levelRange, def(SynthCore::ParamId::Osc3Level), twoDecimals);
     choiceParam("osc1Waveform", "Osc 1 Waveform", {"Tri", "Tri-Saw", "Saw", "Rev Saw", "Square", "Wide", "Narrow"}, juce::roundToInt(def(SynthCore::ParamId::Osc1Waveform)));
     choiceParam("osc2Waveform", "Osc 2 Waveform", {"Tri", "Tri-Saw", "Saw", "Rev Saw", "Square", "Wide", "Narrow"}, juce::roundToInt(def(SynthCore::ParamId::Osc2Waveform)));
     choiceParam("osc3Waveform", "Osc 3 Waveform", {"Tri", "Tri-Saw", "Saw", "Rev Saw", "Square", "Wide", "Narrow"}, juce::roundToInt(def(SynthCore::ParamId::Osc3Waveform)));
@@ -159,7 +160,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
     floatParam("filterRelease", "Filter Release", releaseRange, def(SynthCore::ParamId::FilterRelease), timeAttr);
 
     boolParam("noiseEnabled", "Noise Enabled", def(SynthCore::ParamId::NoiseEnabled) >= 0.5f);
-    floatParam("noiseLevel", "Noise Level", unitRange, def(SynthCore::ParamId::NoiseLevel), twoDecimals);
+    floatParam("noiseLevel", "Noise Level", levelRange, def(SynthCore::ParamId::NoiseLevel), twoDecimals);
     choiceParam("noiseMode", "Noise Mode", {"White", "Pink"}, juce::roundToInt(def(SynthCore::ParamId::NoiseMode)));
     boolParam("lfoEnabled", "LFO Enabled", def(SynthCore::ParamId::LfoEnabled) >= 0.5f);
 
@@ -264,7 +265,7 @@ void LadderVoiceAudioProcessor::pushParametersToSynth()
     synth.setParameter(SynthCore::ParamId::Retrigger, value(parameters, "retrigger"));
     synth.setParameter(SynthCore::ParamId::NotePriority,   value(parameters, "notePriority"));
     synth.setParameter(SynthCore::ParamId::Osc1PulseWidth, value(parameters, "osc1PulseWidth"));
-    synth.setParameter(SynthCore::ParamId::AnalogDrift,    value(parameters, "analogDrift"));
+    synth.setParameter(SynthCore::ParamId::AnalogDrift,    0.0f); // always off; old saved state must not restore hidden drift
     const auto lfoAmount = value(parameters, "lfoAmount");
     const auto modWheelAmount = value(parameters, "modWheelAmount");
     synth.setParameter(SynthCore::ParamId::LfoEnabled,     (lfoAmount > 0.0001f || modWheelAmount > 0.0001f) ? 1.0f : 0.0f);
@@ -335,6 +336,10 @@ void LadderVoiceAudioProcessor::setStateInformation(const void* data, int sizeIn
 {
     if (auto xml = getXmlFromBinary(data, sizeInBytes)) {
         parameters.replaceState(juce::ValueTree::fromXml(*xml));
+        // Force analogDrift to 0 — there is no visible UI control for it.
+        // Old saved state may contain a non-zero value from a prior build.
+        if (auto* p = parameters.getParameter("analogDrift"))
+            p->setValueNotifyingHost(p->convertTo0to1(0.0f));
     }
 }
 
@@ -342,3 +347,4 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new LadderVoiceAudioProcessor();
 }
+

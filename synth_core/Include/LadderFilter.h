@@ -10,6 +10,7 @@ public:
     void setContourAmount(double amount);
     void setKeyboardTrackingAmount(double amount);
     void setDrive(double drive);
+    void setMainDrivePush(double drive);
     void reset();
     double processSample(double input, double filterEnvelopeValue, double keyboardMidiNote);
 
@@ -20,6 +21,9 @@ private:
     double _contourAmount = 0.25;
     double _keyboardTrackingAmount = 0.0;
     double _drive = 0.0;
+    double _mainDrivePush = 0.0;
+    double _driveBodyLp = 0.0;
+    double _driveGrowlLp = 0.0;
     double _stage[4] = {0.0, 0.0, 0.0, 0.0};
 
     double _effectiveCutoff(double filterEnvelopeValue, double keyboardMidiNote) const;

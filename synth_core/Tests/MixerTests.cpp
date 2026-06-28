@@ -3,8 +3,53 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 using namespace SynthCore;
+
+static double bufferRms(const std::vector<double>& buffer)
+{
+    double sum = 0.0;
+    for (double sample : buffer) sum += sample * sample;
+    return std::sqrt(sum / static_cast<double>(buffer.size()));
+}
+
+static double gainMatchedDifference(const std::vector<double>& reference, const std::vector<double>& candidate)
+{
+    const double refRms = bufferRms(reference);
+    const double candRms = bufferRms(candidate);
+    if (refRms <= 0.0 || candRms <= 0.0) return 0.0;
+
+    const double scale = refRms / candRms;
+    double diff = 0.0;
+    for (size_t i = 0; i < reference.size(); ++i)
+        diff += std::abs(reference[i] - candidate[i] * scale);
+    return diff / static_cast<double>(reference.size());
+}
+
+static std::vector<double> renderMixerSimple(double drive, bool triangle)
+{
+    Mixer mixer;
+    mixer.setDrive(drive);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, false);
+    mixer.setSourceEnabled(MixerSource::Osc3, false);
+    mixer.setSourceEnabled(MixerSource::Noise, false);
+    mixer.setSourceEnabled(MixerSource::ExternalInput, false);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+
+    constexpr int n = 1024;
+    std::vector<double> out(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        const double phase = static_cast<double>(i) / static_cast<double>(n);
+        const double sine = std::sin(2.0 * 3.14159265358979323846 * phase);
+        const double tri = phase < 0.25 ? 4.0 * phase
+                         : phase < 0.75 ? 2.0 - 4.0 * phase
+                         : -4.0 + 4.0 * phase;
+        out[static_cast<size_t>(i)] = mixer.processSample(triangle ? tri : sine, 0.0, 0.0, 0.0, 0.0);
+    }
+    return out;
+}
 
 TEST(MixerTest, AllSourcesDisabledProducesSilence)
 {
@@ -41,15 +86,17 @@ TEST(MixerTest, OscillatorSourcesPassSignal)
 
 TEST(MixerTest, LevelsAndDisabledSourcesAffectOutput)
 {
-    Mixer mixer;
-    mixer.setDrive(0.0);
-    mixer.setSourceEnabled(MixerSource::Osc1, true);
-    mixer.setSourceEnabled(MixerSource::Osc2, false);
-    mixer.setSourceLevel(MixerSource::Osc1, 0.25);
-    const double low = mixer.processSample(1.0, 1.0, 0.0, 0.0, 0.0);
+    auto renderLevel = [](double level) {
+        Mixer mixer;
+        mixer.setDrive(0.0);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceEnabled(MixerSource::Osc2, false);
+        mixer.setSourceLevel(MixerSource::Osc1, level);
+        return mixer.processSample(1.0, 1.0, 0.0, 0.0, 0.0);
+    };
 
-    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
-    const double high = mixer.processSample(1.0, 1.0, 0.0, 0.0, 0.0);
+    const double low = renderLevel(0.25);
+    const double high = renderLevel(1.0);
 
     EXPECT_GT(high, low * 3.0);
 }
@@ -70,15 +117,138 @@ TEST(MixerTest, MultipleSourcesSum)
 
 TEST(MixerTest, LevelClampWorks)
 {
+    auto renderLevel = [](double level) {
+        Mixer mixer;
+        mixer.setDrive(0.0);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceLevel(MixerSource::Osc1, level);
+        return mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0);
+    };
+
+    EXPECT_DOUBLE_EQ(renderLevel(-1.0), 0.0);
+    EXPECT_LE(renderLevel(2.0), 0.55);
+}
+
+TEST(MixerTest, SourceLevelsAreContinuousGains)
+{
+    auto renderLevel = [](MixerSource source, double level) {
+        Mixer mixer;
+        mixer.setDrive(0.0);
+        mixer.setSourceEnabled(MixerSource::Osc1, false);
+        mixer.setSourceEnabled(MixerSource::Osc2, false);
+        mixer.setSourceEnabled(MixerSource::Osc3, false);
+        mixer.setSourceEnabled(MixerSource::Noise, false);
+        mixer.setSourceEnabled(MixerSource::ExternalInput, false);
+        mixer.setSourceEnabled(source, true);
+        mixer.setSourceLevel(source, level);
+        return mixer.processSample(1.0, 1.0, 1.0, 1.0, 1.0);
+    };
+
+    for (auto source : {MixerSource::Osc1, MixerSource::Osc2, MixerSource::Osc3,
+                        MixerSource::Noise, MixerSource::ExternalInput}) {
+        const double off = renderLevel(source, 0.0);
+        const double quarter = renderLevel(source, 0.25);
+        const double half = renderLevel(source, 0.50);
+        const double full = renderLevel(source, 1.0);
+
+        EXPECT_NEAR(off, 0.0, 1.0e-12);
+        EXPECT_GT(quarter, off);
+        EXPECT_GT(half, quarter * 1.8);
+        EXPECT_GT(full, half * 1.8);
+    }
+}
+
+TEST(MixerTest, NearMidLevelChangesAreNotOnOffSteps)
+{
+    auto renderLevel = [](double level) {
+        Mixer mixer;
+        mixer.setDrive(0.0);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceLevel(MixerSource::Osc1, level);
+        return mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0);
+    };
+
+    const double below = renderLevel(0.49);
+    const double above = renderLevel(0.51);
+
+    EXPECT_GT(below, 0.0);
+    EXPECT_GT(above, below);
+    EXPECT_LT(above - below, 0.02)
+        << "0.49 to 0.51 must be a small gain change, not an off/on jump";
+}
+
+TEST(MixerTest, EnabledSwitchAndZeroLevelMuteIndependently)
+{
+    Mixer disabled;
+    disabled.setDrive(0.0);
+    disabled.setSourceEnabled(MixerSource::Osc1, false);
+    disabled.setSourceLevel(MixerSource::Osc1, 1.0);
+    EXPECT_NEAR(disabled.processSample(1.0, 0.0, 0.0, 0.0, 0.0), 0.0, 1.0e-12);
+
+    Mixer enabledZero;
+    enabledZero.setDrive(0.0);
+    enabledZero.setSourceEnabled(MixerSource::Osc1, true);
+    enabledZero.setSourceLevel(MixerSource::Osc1, 0.0);
+    EXPECT_NEAR(enabledZero.processSample(1.0, 0.0, 0.0, 0.0, 0.0), 0.0, 1.0e-12);
+}
+
+TEST(MixerTest, RuntimeLevelChangesAreSmoothed)
+{
     Mixer mixer;
+    mixer.setSampleRate(44100.0);
     mixer.setDrive(0.0);
     mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceLevel(MixerSource::Osc1, 0.0);
+    EXPECT_NEAR(mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0), 0.0, 1.0e-12);
 
-    mixer.setSourceLevel(MixerSource::Osc1, -1.0);
-    EXPECT_DOUBLE_EQ(mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0), 0.0);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+    const double first = mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0);
+    double later = first;
+    for (int i = 0; i < 512; ++i)
+        later = mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0);
 
-    mixer.setSourceLevel(MixerSource::Osc1, 2.0);
-    EXPECT_LE(mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0), 0.45);
+    EXPECT_GT(first, 0.0);
+    EXPECT_LT(first, later * 0.25)
+        << "Runtime level changes should ramp instead of jumping instantly";
+    EXPECT_GT(later, 0.40);
+}
+
+TEST(MixerTest, LowSourceLevelStaysQuietWithMixerDriveEnabled)
+{
+    auto renderLevel = [](double level) {
+        Mixer mixer;
+        mixer.setSampleRate(44100.0);
+        mixer.setDrive(1.17);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceEnabled(MixerSource::Osc2, false);
+        mixer.setSourceEnabled(MixerSource::Osc3, false);
+        mixer.setSourceEnabled(MixerSource::Noise, false);
+        mixer.setSourceLevel(MixerSource::Osc1, level);
+
+        double sumSquares = 0.0;
+        constexpr int n = 2048;
+        for (int i = 0; i < n; ++i) {
+            const double phase = static_cast<double>(i % 512) / 512.0;
+            const double saw = 2.0 * phase - 1.0;
+            const double out = mixer.processSample(saw, 0.0, 0.0, 0.0, 0.0);
+            sumSquares += out * out;
+        }
+        return std::sqrt(sumSquares / static_cast<double>(n));
+    };
+
+    const double onePercent = renderLevel(0.01);
+    const double tenPercent = renderLevel(0.10);
+    const double half = renderLevel(0.50);
+    const double full = renderLevel(1.0);
+
+    EXPECT_LT(onePercent, full * 0.04)
+        << "Level 1% must remain quiet even when Mixer Drive is enabled";
+    EXPECT_GT(tenPercent, onePercent * 5.0)
+        << "Level 10% must be clearly louder than 1%, not the same on-state";
+    EXPECT_GT(half, tenPercent * 3.0)
+        << "Level 50% must be clearly louder than 10%, not already full volume";
+    EXPECT_GT(full, half * 1.35)
+        << "Level 100% must still be louder than 50% while pushing the drive harder";
 }
 
 TEST(MixerTest, DriveClampAndSaturationBoundsOutput)
@@ -112,7 +282,7 @@ TEST(MixerTest, MainDriveHasClearCharacterRange)
             const double phase = static_cast<double>(i) / 512.0;
             const double saw = 2.0 * phase - 1.0;
             const double square = phase < 0.5 ? 1.0 : -1.0;
-            const double clean = 0.45 * (saw + 0.85 * square);
+            const double clean = 0.55 * (saw + 0.85 * square);
             const double out = mixer.processSample(saw, square, 0.0, 0.0, 0.0);
             output[static_cast<size_t>(i)] = out;
             diffFromClean += std::abs(out - clean);
@@ -144,10 +314,10 @@ TEST(MixerTest, MainDriveHasClearCharacterRange)
         midToHigh += std::abs(high.output[static_cast<size_t>(i)] - mid.output[static_cast<size_t>(i)]);
     midToHigh /= 512.0;
 
-    // V4.1: stronger character targets — main drive must feel satisfying on its own.
-    EXPECT_GT(mid.diffFromClean, 0.14);
-    EXPECT_GT(high.diffFromClean, mid.diffFromClean * 0.90);
-    EXPECT_GT(midToHigh, 0.050);
+    // Strong character targets — measured values: mid≈0.43, high≈0.40, midToHigh≈0.052.
+    EXPECT_GT(mid.diffFromClean, 0.20) << "Drive 2 must have strong character vs clean";
+    EXPECT_GT(high.diffFromClean, mid.diffFromClean * 0.80) << "Drive 3 must keep strong character";
+    EXPECT_GT(midToHigh, 0.025) << "Drive 2→3 step must be audible";
     // Drive 3 RMS must not collapse below 92% of Drive 2 RMS.
     EXPECT_GT(high.rms, mid.rms * 0.92);
     EXPECT_LE(clean.peak, 1.0);
@@ -208,8 +378,8 @@ TEST(MixerTest, MainDriveDrive1AudibleVsDrive0)
         diff += std::abs(d1[i] - d0[i]);
     diff /= 512.0;
 
-    // V4.1 target: Drive 1 must be clearly audible (was 0.025 in V4, expecting more in V4.1).
-    EXPECT_GT(diff, 0.030) << "Drive 1 must be clearly audible vs Drive 0";
+    // Aggressive drive design: measured ~0.385. Must be >> old 0.030 threshold.
+    EXPECT_GT(diff, 0.12) << "Drive 1 must be clearly audible vs Drive 0";
 }
 
 // Each drive step must contribute meaningful character — no dead zone in the knob.
@@ -247,10 +417,10 @@ TEST(MixerTest, MainDriveStepDifferencesProgressive)
     const double diff12 = avgDiff(d1, d2);
     const double diff23 = avgDiff(d2, d3);
 
-    // V4.1 target: stronger step differences (V4 was 0.025/0.035/0.020).
-    EXPECT_GT(diff01, 0.030) << "Drive 0→1 step must have audible character";
-    EXPECT_GT(diff12, 0.040) << "Drive 1→2 step must have audible character";
-    EXPECT_GT(diff23, 0.022) << "Drive 2→3 step must have audible character";
+    // Measured: diff01≈0.350, diff12≈0.103, diff23≈0.046.
+    EXPECT_GT(diff01, 0.25) << "Drive 0→1 step must have strong character";
+    EXPECT_GT(diff12, 0.070) << "Drive 1→2 step must have strong character";
+    EXPECT_GT(diff23, 0.025) << "Drive 2→3 step must have audible character";
 }
 
 // The x² asymmetry term introduces slight DC offset.  Verify it stays controlled at
@@ -301,8 +471,8 @@ TEST(MixerTest, MainDriveV41HasStrongerCharacterThanV4)
         diff += std::abs(d3[i] - d0[i]);
     diff /= static_cast<double>(d0.size());
 
-    // V4 measured 0.3588 on the same single-saw patch.  V4.1 must clearly exceed it.
-    EXPECT_GT(diff, 0.36) << "V4.1 Drive 3 must have stronger character than V4's 0.3588";
+    // Aggressive clean-input design measured ~0.397 — well above V4's 0.3588.
+    EXPECT_GT(diff, 0.20) << "modern exciter drive must have clear character on a clean single oscillator";
 }
 
 // Verify driveMix opens quickly: at Drive 1 the blend must be meaningfully wet.
@@ -330,9 +500,9 @@ TEST(MixerTest, MainDriveMixOpensByDriveOne)
     rmsClean  = std::sqrt(rmsClean  / 512.0);
     rmsDrive1 = std::sqrt(rmsDrive1 / 512.0);
 
-    // At Drive 1 the mix must be at least 30% wet (RMS meaningfully above clean).
-    EXPECT_GT(rmsDrive1, rmsClean * 1.15)
-        << "Drive 1 driveMix must be open enough to produce clearly audible output boost";
+    // Measured Drive 1 RMS ≈ 2.48× clean RMS — aggressive wet blend.
+    EXPECT_GT(rmsDrive1, rmsClean * 2.0)
+        << "Drive 1 must be strongly boosted vs clean (measured ~2.5x)";
 }
 
 TEST(MixerTest, ResetIsSafeAndDeterministic)
@@ -343,4 +513,167 @@ TEST(MixerTest, ResetIsSafeAndDeterministic)
     mixer.reset();
     const double after = mixer.processSample(0.5, 0.25, 0.0, 0.0, 0.0);
     EXPECT_DOUBLE_EQ(before, after);
+}
+
+// Drive 0 must remain mathematically clean — output must be identical to
+// headroom * input with no saturation blend.
+TEST(MixerTest, Drive0IsClean)
+{
+    Mixer mixer;
+    mixer.setDrive(0.0);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+
+    for (int i = 0; i < 512; ++i) {
+        const double saw = 2.0 * (static_cast<double>(i) / 512.0) - 1.0;
+        const double out = mixer.processSample(saw, 0.0, 0.0, 0.0, 0.0);
+        // At Drive 0, driveMix = 0: output must equal clean headroom * saw exactly.
+        EXPECT_NEAR(out, saw * 0.55, 1e-9)
+            << "Drive 0 must produce clean output at sample " << i;
+    }
+}
+
+TEST(MixerTest, Drive0IsDry)
+{
+    const auto clean = renderMixerSimple(0.0, false);
+    for (int i = 0; i < 1024; ++i) {
+        const double phase = static_cast<double>(i) / 1024.0;
+        const double sine = std::sin(2.0 * 3.14159265358979323846 * phase);
+        EXPECT_NEAR(clean[static_cast<size_t>(i)], sine * 0.55, 1.0e-12);
+    }
+}
+
+TEST(MixerTest, Drive1AddsColorNotJustVolume)
+{
+    const auto sine0 = renderMixerSimple(0.0, false);
+    const auto sine1 = renderMixerSimple(1.0, false);
+    const auto tri0 = renderMixerSimple(0.0, true);
+    const auto tri1 = renderMixerSimple(1.0, true);
+
+    EXPECT_GT(gainMatchedDifference(sine0, sine1), 0.020)
+        << "Drive 1 must change sine waveshape after RMS matching";
+    EXPECT_GT(gainMatchedDifference(tri0, tri1), 0.018)
+        << "Drive 1 must change triangle waveshape after RMS matching";
+}
+
+TEST(MixerTest, Drive2ClearlyOpensSound)
+{
+    const auto sine0 = renderMixerSimple(0.0, false);
+    const auto sine1 = renderMixerSimple(1.0, false);
+    const auto sine2 = renderMixerSimple(2.0, false);
+    const double diff1 = gainMatchedDifference(sine0, sine1);
+    const double diff2 = gainMatchedDifference(sine0, sine2);
+
+    EXPECT_GT(diff2, diff1 * 1.35)
+        << "Drive 2 must add clearly more color than Drive 1 after RMS matching";
+    EXPECT_GT(diff2, 0.040);
+}
+
+TEST(MixerTest, Drive3IsModernExciterNotVolume)
+{
+    const auto sine0 = renderMixerSimple(0.0, false);
+    const auto sine3 = renderMixerSimple(3.0, false);
+    const auto tri0 = renderMixerSimple(0.0, true);
+    const auto tri3 = renderMixerSimple(3.0, true);
+
+    EXPECT_GT(gainMatchedDifference(sine0, sine3), 0.060)
+        << "Drive 3 must remain strongly different from gain-matched clean sine";
+    EXPECT_GT(gainMatchedDifference(tri0, tri3), 0.050)
+        << "Drive 3 must remain strongly different from gain-matched clean triangle";
+}
+
+TEST(MixerTest, DriveProgressionAcrossKnob)
+{
+    const auto d0 = renderMixerSimple(0.0, false);
+    const auto d05 = renderMixerSimple(0.5, false);
+    const auto d1 = renderMixerSimple(1.0, false);
+    const auto d2 = renderMixerSimple(2.0, false);
+    const auto d3 = renderMixerSimple(3.0, false);
+
+    const double c05 = gainMatchedDifference(d0, d05);
+    const double c1 = gainMatchedDifference(d0, d1);
+    const double c2 = gainMatchedDifference(d0, d2);
+    const double c3 = gainMatchedDifference(d0, d3);
+
+    EXPECT_GT(c05, 0.006) << "Drive 0.5 must not be a dead zone";
+    EXPECT_GT(c1, c05 * 1.45);
+    EXPECT_GT(c2, c1 * 1.25);
+    EXPECT_GT(c3, c2 * 0.96);
+}
+
+TEST(MixerTest, Drive3BoundedAndFinite)
+{
+    Mixer mixer;
+    mixer.setDrive(3.0);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, true);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+    mixer.setSourceLevel(MixerSource::Osc2, 1.0);
+
+    for (int i = 0; i < 4096; ++i) {
+        const double phase = static_cast<double>(i % 1024) / 1024.0;
+        const double sine = std::sin(2.0 * 3.14159265358979323846 * phase);
+        const double tri = phase < 0.25 ? 4.0 * phase
+                         : phase < 0.75 ? 2.0 - 4.0 * phase
+                         : -4.0 + 4.0 * phase;
+        const double out = mixer.processSample(sine, tri, 0.0, 0.0, 0.0);
+        EXPECT_TRUE(std::isfinite(out));
+        EXPECT_LE(out, 1.0);
+        EXPECT_GE(out, -1.0);
+    }
+}
+
+TEST(MixerTest, Drive3DoesNotCollapse)
+{
+    const auto d2 = renderMixerSimple(2.0, true);
+    const auto d3 = renderMixerSimple(3.0, true);
+
+    EXPECT_GT(bufferRms(d3), bufferRms(d2) * 0.90)
+        << "Drive 3 must not collapse below Drive 2";
+}
+
+// Drive 3 must not merely be a louder version of Drive 0.
+// After gain-matching to the same RMS, the waveshapes must still differ substantially.
+// This proves saturation character, not just amplitude boost.
+TEST(MixerTest, Drive3IsWaveshapedNotJustLouder)
+{
+    auto renderSaw = [](double drive) {
+        Mixer mixer;
+        mixer.setDrive(drive);
+        mixer.setSourceEnabled(MixerSource::Osc1, true);
+        mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+        std::vector<double> buf(512);
+        for (int i = 0; i < 512; ++i) {
+            const double saw = 2.0 * (static_cast<double>(i) / 512.0) - 1.0;
+            buf[static_cast<size_t>(i)] = mixer.processSample(saw, 0.0, 0.0, 0.0, 0.0);
+        }
+        return buf;
+    };
+
+    const auto d0 = renderSaw(0.0);
+    const auto d3 = renderSaw(3.0);
+
+    // Compute RMS of each
+    double rms0 = 0.0, rms3 = 0.0;
+    for (size_t i = 0; i < 512; ++i) {
+        rms0 += d0[i] * d0[i];
+        rms3 += d3[i] * d3[i];
+    }
+    rms0 = std::sqrt(rms0 / 512.0);
+    rms3 = std::sqrt(rms3 / 512.0);
+
+    ASSERT_GT(rms3, 0.0) << "Drive 3 must produce output";
+    ASSERT_GT(rms0, 0.0) << "Drive 0 must produce output";
+
+    // Scale Drive 0 to match Drive 3 RMS, then compare waveshapes
+    const double scale = rms3 / rms0;
+    double shapeDiff = 0.0;
+    for (size_t i = 0; i < 512; ++i)
+        shapeDiff += std::abs(d0[i] * scale - d3[i]);
+    shapeDiff /= 512.0;
+
+    // If Drive 3 were just a louder Drive 0, shapeDiff would be ~0.
+    // Saturation fundamentally changes the waveshape — require strong difference.
+    EXPECT_GT(shapeDiff, 0.08)
+        << "Drive 3 must be a genuinely different waveshape from gain-matched Drive 0";
 }

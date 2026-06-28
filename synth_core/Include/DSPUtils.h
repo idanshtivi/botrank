@@ -93,10 +93,12 @@ inline double antiFizz(double input, double shaped, double amount)
     return shaped - (0.10 * tame) * hiDelta * hiDelta * hiDelta;
 }
 
-// Character drive: warm body at low settings, extra edge as the knob rises.
-// amount in [0,1] (use normDrive to convert UI value 0..3).
-// Coefficients are deliberately conservative to avoid inter-oscillator
-// intermodulation products that would create LFO-like pumping.
+inline double removeBias(double value, double bias)
+{
+    return value - std::tanh(bias);
+}
+
+// Character drive used by internal output color and filter input push.
 inline double mainDriveSaturate(double input, double amount)
 {
     amount = clamp01(amount);
@@ -128,49 +130,77 @@ inline double mainDriveSaturate(double input, double amount)
     return y * trim;
 }
 
+// Filter Drive: a stronger pre-ladder exciter. This keeps the ladder topology and
+// cutoff/resonance math unchanged, but feeds it a genuinely reshaped signal so
+// the control is heard as color, compression, and bite instead of level.
+inline double filterDriveSaturate(double input, double amount)
+{
+    amount = clamp01(amount);
+
+    const double curve = std::pow(amount, 0.96);
+    const double push = 1.0 + 5.6 * curve + 2.4 * amount;
+    const double x = std::clamp(input * push, -5.0, 5.0);
+
+    const double bodyLimit = 1.10 - 0.18 * amount;
+    const double body = bodyLimit * std::tanh(x / bodyLimit);
+
+    const double fold = std::tanh(0.55 * x);
+    const double bitePre = x
+                         + (0.085 + 0.230 * curve) * x * x * x
+                         - (0.045 * curve) * fold * fold * fold;
+    const double bias = 0.010 * curve;
+    const double asym = 0.070 * curve + 0.030 * amount;
+    const double edgeIn = std::clamp(bitePre + asym * x * x + bias, -7.0, 7.0);
+    const double edge = removeBias(std::tanh(edgeIn), bias);
+
+    const double highPush = smoothstep01(0.55, 1.0, amount);
+    const double bite = (edge - body) * (1.0 + 0.45 * highPush);
+    const double biteMix = clamp01(0.18 + 0.78 * std::pow(amount, 0.82));
+    const double dryBody = 0.18 * (1.0 - amount) + 0.060 * amount;
+    double y = body + biteMix * bite + dryBody * input;
+
+    y = antiFizz(input, y, amount);
+
+    const double outputLift = 1.0 + 0.86 * curve;
+    const double trim = 1.0 / (1.0 + 0.035 * (push - 1.0));
+    return softLimit(y * outputLift * trim, 1.12);
+}
+
+// Mixer/Main Drive: parallel modern harmonic exciter inside the existing mixer
+// drive block. It keeps Drive 0 dry, adds warm body, extracts an upper-harmonic
+// layer from a stronger asymmetric/cubic shaper, then blends that layer back in.
 inline double mixerDriveSaturate(double input, double amount)
 {
     amount = clamp01(amount);
 
-    // Two-component preGain: 'early' gives immediate response at Drive 1;
-    // 'late' adds extra push in the upper range.
-    const double early   = std::pow(amount, 0.72);
-    const double late    = smoothstep01(0.35, 1.0, amount);
-    const double preGain = 1.0 + 3.8 * early + 2.3 * late;   // max ~7.1x at Drive 3
-    const double x       = input * preGain;
+    const double driveCurve = std::pow(amount, 0.52);
 
-    // Slightly relaxed from V4's 2.35 — lets Drive 3 breathe while staying poly-safe.
-    const double xp = std::clamp(x, -2.60, 2.60);
+    // Warm/body layer: smooth saturation with moderate gain. Dividing by
+    // bodyGain keeps weight and movement without turning the layer into volume.
+    const double bodyGain = 1.0 + 4.2 * driveCurve + 1.5 * amount;
+    const double bodyX = std::clamp(input * bodyGain, -5.0, 5.0);
+    const double warm = std::tanh(bodyX) / (1.0 + 0.10 * (bodyGain - 1.0));
 
-    // Warm layer: normalised so slope ≈ 1 at origin — clean feel at low drive.
-    const double tanhNorm = std::tanh(0.92);
-    const double warm     = std::tanh(xp * 0.92) / tanhNorm;
+    // Exciter layer: higher gain plus asymmetry and cubic curvature. The
+    // difference between edge and warm is the modern shine / upper-harmonic layer.
+    const double edgeGain = 1.0 + 12.5 * driveCurve + 4.8 * amount;
+    const double edgeX = std::clamp(input * edgeGain, -4.0, 4.0);
+    const double asym = 0.075 * driveCurve + 0.034 * amount;
+    const double cubic = 0.090 + 0.300 * driveCurve;
+    const double bias = 0.008 * driveCurve;
+    const double edgePre = edgeX + asym * edgeX * edgeX + cubic * edgeX * edgeX * edgeX + bias;
+    double edge = std::tanh(edgePre) - std::tanh(bias);
+    edge /= (1.0 + 0.012 * edgeGain);
 
-    // Edge layer: slightly richer than V4, still controlled.
-    const double edgeAmount = smoothstep01(0.40, 1.0, amount);
-    const double asym       = 0.017 * amount;
-    const double cubic      = 0.016 + 0.040 * edgeAmount;
-    const double bias       = 0.004 * amount;
+    const double highPush = smoothstep01(0.60, 1.0, amount);
+    const double harmonicLayer = (edge - warm) * (1.0 + 0.35 * highPush);
+    const double harmonicBlend = clamp01(0.24 + 0.92 * std::pow(amount, 0.62));
+    const double bodyPreserve = 0.28 * (1.0 - amount) + 0.070 * amount;
+    double modern = warm + harmonicBlend * harmonicLayer + bodyPreserve * input;
 
-    const double shaped = xp + asym * xp * xp + cubic * xp * xp * xp + bias;
-    double edge = std::tanh(shaped);
-    edge -= std::tanh(bias);
-
-    // Progressive blend: capped at 0.88 so Drive 3 stays musical, not harsh.
-    const double edgeMixRaw = 0.10 + 0.24 * early + 0.54 * edgeAmount;
-    const double edgeMix    = std::min(clamp01(edgeMixRaw), 0.88);
-    double wet = lerp(warm, edge, edgeMix);
-
-    wet = antiFizz(input, wet, amount);
-
-    // Body preserve: keeps low-mid presence as drive increases.
-    double y = wet + input * (0.030 * amount);
-
-    // Slightly lighter trim — Drive 3 must not feel smaller than Drive 2.
-    const double trim = 1.0 / (1.0 + 0.028 * (preGain - 1.0));
-    y *= trim;
-
-    return softLimit(y, 1.05);
+    modern = antiFizz(input, modern, amount);
+    modern *= 1.0 + 1.85 * driveCurve;
+    return softLimit(modern, 1.18);
 }
 
 } // namespace DriveUtils

@@ -2,6 +2,7 @@
 #include "../Include/SynthEngine.h"
 #include "../Include/Mixer.h"
 #include "../Include/LadderFilter.h"
+#include "../Include/OutputStage.h"
 #include "../Include/DSPUtils.h"
 #include <cmath>
 #include <vector>
@@ -72,6 +73,154 @@ static RenderStats statsFor(const std::vector<float>& buf)
     return stats;
 }
 
+struct DriveProbeStats {
+    double mixerRms = 0.0;
+    double mixerPeak = 0.0;
+    double ladderInputRms = 0.0;
+    double ladderInputPeak = 0.0;
+    double ladderOutputRms = 0.0;
+    double ladderOutputPeak = 0.0;
+    double finalRms = 0.0;
+    double finalPeak = 0.0;
+    bool finite = true;
+};
+
+static DriveProbeStats probeDriveChain(double mainDrive, double cutoffHz, double resonance)
+{
+    Mixer mixer;
+    mixer.setSampleRate(44100.0);
+    mixer.setDrive(mainDrive);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, false);
+    mixer.setSourceEnabled(MixerSource::Osc3, false);
+    mixer.setSourceEnabled(MixerSource::Noise, false);
+    mixer.setSourceEnabled(MixerSource::ExternalInput, false);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+
+    LadderFilter filter;
+    filter.setSampleRate(44100.0);
+    filter.setCutoffHz(cutoffHz);
+    filter.setResonance(resonance);
+    filter.setContourAmount(0.0);
+    filter.setKeyboardTrackingAmount(0.0);
+    filter.setDrive(0.0);
+    filter.setMainDrivePush(mainDrive);
+
+    OutputStage output;
+    output.setSampleRate(44100.0);
+    output.setMasterVolume(1.0);
+    output.setDrive(0.0);
+    output.setMainDriveLink(mainDrive);
+
+    DriveProbeStats stats;
+    constexpr int frames = 8192;
+    for (int i = 0; i < frames; ++i) {
+        const double phase = std::fmod(static_cast<double>(i) * 110.0 / 44100.0, 1.0);
+        const double saw = 2.0 * phase - 1.0;
+        const double mixed = mixer.processSample(saw, 0.0, 0.0, 0.0, 0.0);
+        const double ladderInput = mixed;
+        const double filtered = filter.processSample(ladderInput, 0.0, 48.0);
+        const double finalOut = output.processSample(filtered);
+
+        stats.finite = stats.finite && std::isfinite(mixed) && std::isfinite(filtered) && std::isfinite(finalOut);
+        stats.mixerRms += mixed * mixed;
+        stats.ladderInputRms += ladderInput * ladderInput;
+        stats.ladderOutputRms += filtered * filtered;
+        stats.finalRms += finalOut * finalOut;
+        stats.mixerPeak = std::max(stats.mixerPeak, std::abs(mixed));
+        stats.ladderInputPeak = std::max(stats.ladderInputPeak, std::abs(ladderInput));
+        stats.ladderOutputPeak = std::max(stats.ladderOutputPeak, std::abs(filtered));
+        stats.finalPeak = std::max(stats.finalPeak, std::abs(finalOut));
+    }
+
+    stats.mixerRms = std::sqrt(stats.mixerRms / static_cast<double>(frames));
+    stats.ladderInputRms = std::sqrt(stats.ladderInputRms / static_cast<double>(frames));
+    stats.ladderOutputRms = std::sqrt(stats.ladderOutputRms / static_cast<double>(frames));
+    stats.finalRms = std::sqrt(stats.finalRms / static_cast<double>(frames));
+    return stats;
+}
+
+struct GrowlBandStats {
+    double lowMidRms = 0.0;
+    double highRms = 0.0;
+    double finalRms = 0.0;
+    double finalPeak = 0.0;
+    bool finite = true;
+};
+
+static GrowlBandStats probeLowMidGrowlPatch(double mainDrive)
+{
+    constexpr double sampleRate = 44100.0;
+    Mixer mixer;
+    mixer.setSampleRate(sampleRate);
+    mixer.setDrive(mainDrive);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, true);
+    mixer.setSourceEnabled(MixerSource::Osc3, false);
+    mixer.setSourceEnabled(MixerSource::Noise, false);
+    mixer.setSourceEnabled(MixerSource::ExternalInput, false);
+    mixer.setSourceLevel(MixerSource::Osc1, 0.85);
+    mixer.setSourceLevel(MixerSource::Osc2, 0.60);
+    mixer.setSourceLevel(MixerSource::Osc3, 0.0);
+    mixer.setSourceLevel(MixerSource::Noise, 0.0);
+
+    LadderFilter filter;
+    filter.setSampleRate(sampleRate);
+    filter.setCutoffHz(1000.0);
+    filter.setResonance(0.2);
+    filter.setContourAmount(0.0);
+    filter.setKeyboardTrackingAmount(0.0);
+    filter.setDrive(0.0);
+    filter.setMainDrivePush(mainDrive);
+
+    OutputStage output;
+    output.setSampleRate(sampleRate);
+    output.setMasterVolume(1.0);
+    output.setDrive(0.0);
+    output.setMainDriveLink(mainDrive);
+
+    auto lpCoeff = [](double cutoffHz) {
+        constexpr double pi = 3.14159265358979323846;
+        return 1.0 - std::exp(-2.0 * pi * cutoffHz / sampleRate);
+    };
+
+    const double g80 = lpCoeff(80.0);
+    const double g500 = lpCoeff(500.0);
+    const double g2000 = lpCoeff(2000.0);
+    double lp80 = 0.0;
+    double lp500 = 0.0;
+    double lp2000 = 0.0;
+
+    GrowlBandStats stats;
+    constexpr int frames = 16384;
+    for (int i = 0; i < frames; ++i) {
+        const double phase1 = std::fmod(static_cast<double>(i) * 110.0 / sampleRate, 1.0);
+        const double phase2 = std::fmod(static_cast<double>(i) * 110.0 / sampleRate, 1.0);
+        const double saw = 2.0 * phase1 - 1.0;
+        const double square = phase2 < 0.5 ? 1.0 : -1.0;
+        const double mixed = mixer.processSample(saw, square, 0.0, 0.0, 0.0);
+        const double filtered = filter.processSample(mixed, 0.0, 48.0);
+        const double finalOut = output.processSample(filtered);
+
+        stats.finite = stats.finite && std::isfinite(mixed) && std::isfinite(filtered) && std::isfinite(finalOut);
+        lp80 += g80 * (finalOut - lp80);
+        lp500 += g500 * (finalOut - lp500);
+        lp2000 += g2000 * (finalOut - lp2000);
+
+        const double lowMid = lp500 - lp80;
+        const double high = finalOut - lp2000;
+        stats.lowMidRms += lowMid * lowMid;
+        stats.highRms += high * high;
+        stats.finalRms += finalOut * finalOut;
+        stats.finalPeak = std::max(stats.finalPeak, std::abs(finalOut));
+    }
+
+    stats.lowMidRms = std::sqrt(stats.lowMidRms / static_cast<double>(frames));
+    stats.highRms = std::sqrt(stats.highRms / static_cast<double>(frames));
+    stats.finalRms = std::sqrt(stats.finalRms / static_cast<double>(frames));
+    return stats;
+}
+
 TEST(SynthEngineAudioTest, PrepareAndDefaultPatchAudible)
 {
     SynthEngine engine;
@@ -98,7 +247,7 @@ TEST(SynthEngineAudioTest, InitPatchDefaultsAreMusicalAndSane)
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc1Range), 3.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Range), 3.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc3Range), 3.0f);
-    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.05f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc3Detune), 0.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::MixerDrive), 1.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::FilterCutoff), 6000.0f);
@@ -119,6 +268,90 @@ TEST(SynthEngineAudioTest, InitPatchDefaultsAreMusicalAndSane)
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::NoiseLevel), 0.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::NoiseMode), 0.0f);
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::PlayMode), 0.0f);
+}
+
+// ── Osc2 default-detune regression tests ─────────────────────────────────────
+
+TEST(Osc2DetuneTest, DefaultDetuneIsZero)
+{
+    SynthEngine engine;
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.0f)
+        << "Osc2 default detune must be 0.0 to avoid inter-oscillator beating";
+}
+
+TEST(Osc2DetuneTest, AfterResetDetuneRemainsZero)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.reset();
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.0f);
+}
+
+TEST(Osc2DetuneTest, CanSetToPositiveValue)
+{
+    SynthEngine engine;
+    engine.setParameter(ParamId::Osc2Detune, 0.05f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.05f);
+}
+
+TEST(Osc2DetuneTest, CanSetToNegativeValue)
+{
+    SynthEngine engine;
+    engine.setParameter(ParamId::Osc2Detune, -0.05f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), -0.05f);
+}
+
+TEST(Osc2DetuneTest, ReturnsExactlyZeroAfterRoundTrip)
+{
+    SynthEngine engine;
+    engine.setParameter(ParamId::Osc2Detune, 0.10f);
+    engine.setParameter(ParamId::Osc2Detune, 0.0f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.0f);
+
+    engine.setParameter(ParamId::Osc2Detune, -0.10f);
+    engine.setParameter(ParamId::Osc2Detune, 0.0f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::Osc2Detune), 0.0f);
+}
+
+// With Osc2Detune=0 and the same range, Osc1 and Osc2 must produce the same
+// fundamental frequency at the same MIDI note.
+TEST(Osc2DetuneTest, Osc1AndOsc2ProduceSameFrequencyAtZeroDetune)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = static_cast<int>(sampleRate);
+
+    auto measureOscHz = [&](int oscToEnable) -> double {
+        SynthEngine engine;
+        engine.prepare(sampleRate, 512);
+        engine.setParameter(ParamId::AmpAttack,      0.001f);
+        engine.setParameter(ParamId::AmpSustain,     1.0f);
+        engine.setParameter(ParamId::FilterCutoff,   20000.0f);
+        engine.setParameter(ParamId::FilterEnvAmount,0.0f);
+        engine.setParameter(ParamId::LfoAmount,      0.0f);
+        engine.setParameter(ParamId::MixerDrive,     0.0f);
+        engine.setParameter(ParamId::FilterDrive,    0.0f);
+        engine.setParameter(ParamId::Osc1Enabled,    oscToEnable == 1 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc1Level,      oscToEnable == 1 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc2Enabled,    oscToEnable == 2 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc2Level,      oscToEnable == 2 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled,    0.0f);
+        engine.setParameter(ParamId::Osc2Detune,     0.0f);
+        engine.setParameter(ParamId::Osc1Waveform,   2.0f); // Saw
+        engine.setParameter(ParamId::Osc2Waveform,   2.0f); // Saw
+        engine.setParameter(ParamId::Osc1Range,      3.0f); // 8'
+        engine.setParameter(ParamId::Osc2Range,      3.0f); // 8'
+        engine.noteOn(69, 100.0f); // A4
+        renderMono(engine, 4096);  // skip attack
+        return measureHz(renderMono(engine, frames), sampleRate);
+    };
+
+    const double f1 = measureOscHz(1);
+    const double f2 = measureOscHz(2);
+    ASSERT_GT(f1, 0.0);
+    ASSERT_GT(f2, 0.0);
+    // At zero detune, Osc1 and Osc2 must be within 0.1 Hz of each other (< 0.4 cents at A4).
+    EXPECT_NEAR(f1, f2, 0.1) << "Osc1 Hz=" << f1 << " Osc2 Hz=" << f2
+        << " — non-zero detune default would create slow beating";
 }
 
 TEST(SynthEngineAudioTest, DefaultPatchRenderIsCleanAndReleases)
@@ -169,9 +402,11 @@ TEST(SynthEngineAudioTest, NoteOffReleasesThenBecomesSilent)
 
 TEST(SynthEngineAudioTest, OscillatorLevelChangesOutput)
 {
+    // Use MixerDrive=0 to test routing linearity without saturation compression.
     SynthEngine engine;
     engine.prepare(44100.0, 512);
     engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+    engine.setParameter(ParamId::MixerDrive, 0.0f);
     engine.noteOn(45, 100.0f);
 
     engine.setParameter(ParamId::Osc1Level, 0.2f);
@@ -179,6 +414,7 @@ TEST(SynthEngineAudioTest, OscillatorLevelChangesOutput)
 
     engine.reset();
     engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+    engine.setParameter(ParamId::MixerDrive, 0.0f);
     engine.setParameter(ParamId::Osc1Level, 1.0f);
     engine.noteOn(45, 100.0f);
     const double high = rms(renderMono(engine, 4096));
@@ -322,6 +558,325 @@ TEST(SynthEngineAudioTest, MasterVolumeAndOutputBounds)
         EXPECT_LE(sample, 1.0f);
         EXPECT_GE(sample, -1.0f);
     }
+}
+
+TEST(SynthEngineRealtimeParamTest, OtherRealtimeKnobsAffectHeldNote)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int frames = 4096;
+
+    auto renderAfterChange = [](auto&& change) {
+        SynthEngine engine;
+        engine.prepare(sampleRate, 512);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc1Level, 1.0f);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.setParameter(ParamId::FilterCutoff, 20000.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.0f);
+        engine.noteOn(72, 100.0f);
+        renderMono(engine, 4096);
+        change(engine);
+        return renderMono(engine, frames);
+    };
+
+    auto avgDiff = [](const std::vector<float>& a, const std::vector<float>& b) {
+        double diff = 0.0;
+        for (size_t i = 0; i < a.size(); ++i)
+            diff += std::abs(static_cast<double>(a[i] - b[i]));
+        return diff / static_cast<double>(a.size());
+    };
+
+    const auto cutoffLow = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::FilterCutoff, 300.0f); });
+    const auto cutoffHigh = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::FilterCutoff, 20000.0f); });
+    EXPECT_GT(avgDiff(cutoffLow, cutoffHigh), 0.01);
+
+    const auto emphLow = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::FilterResonance, 0.0f); });
+    const auto emphHigh = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::FilterResonance, 0.9f); });
+    EXPECT_GT(avgDiff(emphLow, emphHigh), 0.001);
+
+    const auto oscLevelLow = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::Osc1Level, 0.2f); });
+    const auto oscLevelHigh = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::Osc1Level, 1.0f); });
+    EXPECT_GT(rms(oscLevelHigh), rms(oscLevelLow) * 2.0);
+
+    const auto volumeLow = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::MasterVolume, 0.2f); });
+    const auto volumeHigh = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::MasterVolume, 1.0f); });
+    EXPECT_GT(rms(volumeHigh), rms(volumeLow) * 2.0);
+
+    const auto sustainLow = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::AmpSustain, 0.2f); });
+    const auto sustainHigh = renderAfterChange([](SynthEngine& e) { e.setParameter(ParamId::AmpSustain, 1.0f); });
+    EXPECT_GT(rms(sustainHigh), rms(sustainLow) * 2.0);
+}
+
+TEST(SynthEngineRealtimeParamTest, OscillatorLevelsAreContinuousMixerGainAndDriveInput)
+{
+    auto renderOsc1 = [](float level, float mixerDrive) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode, 0.0f);
+        engine.setParameter(ParamId::Osc1Enabled, 1.0f);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::NoiseEnabled, 0.0f);
+        engine.setParameter(ParamId::NoiseLevel, 0.0f);
+        engine.setParameter(ParamId::Osc1Waveform, 2.0f);
+        engine.setParameter(ParamId::Osc1Level, level);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::FilterCutoff, 20000.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.0f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, mixerDrive);
+        engine.noteOn(48, 100.0f);
+        renderMono(engine, 4096);
+        return renderMono(engine, 8192);
+    };
+
+    const auto l25 = renderOsc1(0.25f, 0.0f);
+    const auto l50 = renderOsc1(0.50f, 0.0f);
+    const auto l75 = renderOsc1(0.75f, 0.0f);
+    const auto l100 = renderOsc1(1.0f, 0.0f);
+
+    EXPECT_GT(rms(l50), rms(l25) * 1.55);
+    EXPECT_GT(rms(l75), rms(l50) * 1.25);
+    EXPECT_GT(rms(l100), rms(l75) * 1.12);
+
+    auto gainMatchedDiff = [](const std::vector<float>& reference, const std::vector<float>& candidate) {
+        const double refRms = rms(reference);
+        const double candRms = rms(candidate);
+        if (refRms <= 0.0 || candRms <= 0.0) return 0.0;
+
+        const double scale = refRms / candRms;
+        double diff = 0.0;
+        for (size_t i = 0; i < reference.size(); ++i)
+            diff += std::abs(static_cast<double>(reference[i]) - static_cast<double>(candidate[i]) * scale);
+        return diff / static_cast<double>(reference.size());
+    };
+
+    const double lowLevelDriveColor = gainMatchedDiff(renderOsc1(0.25f, 0.0f), renderOsc1(0.25f, 2.0f));
+    const double highLevelDriveColor = gainMatchedDiff(renderOsc1(1.0f, 0.0f), renderOsc1(1.0f, 2.0f));
+
+    EXPECT_GT(highLevelDriveColor, lowLevelDriveColor * 1.20)
+        << "Higher oscillator level should push the mixer/ladder drive path harder";
+}
+
+TEST(SynthEngineRealtimeParamTest, MixerDriveRuntimeChangeAffectsSameHeldNoteMono)
+{
+    auto renderWithRuntimeDrive = [](float driveAfterSet) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode, 0.0f);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc1Level, 1.0f);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::FilterCutoff, 20000.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.0f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.noteOn(48, 100.0f);
+        renderMono(engine, 4096);
+        engine.setParameter(ParamId::MixerDrive, driveAfterSet);
+        renderMono(engine, 4096);
+        return renderMono(engine, 8192);
+    };
+
+    const auto clean = renderWithRuntimeDrive(0.0f);
+    const auto driven = renderWithRuntimeDrive(3.0f);
+    EXPECT_GT(averageAbsDiff(driven), averageAbsDiff(clean) * 1.05)
+        << "MixerDrive 0->3 on the same held mono note must change the engine output";
+}
+
+TEST(SynthEngineRealtimeParamTest, FilterDriveRuntimeChangeAffectsSameHeldNoteMono)
+{
+    auto renderWithRuntimeDrive = [](float driveAfterSet) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode, 0.0f);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc1Level, 1.0f);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::FilterCutoff, 1600.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.2f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.noteOn(48, 100.0f);
+        renderMono(engine, 4096);
+        engine.setParameter(ParamId::FilterDrive, driveAfterSet);
+        return renderMono(engine, 8192);
+    };
+
+    const auto clean = renderWithRuntimeDrive(0.0f);
+    const auto driven = renderWithRuntimeDrive(3.0f);
+    EXPECT_GT(averageAbsDiff(driven), averageAbsDiff(clean) * 1.02)
+        << "FilterDrive 0->3 on the same held mono note must change the engine output";
+}
+
+TEST(SynthEngineRealtimeParamTest, DriveRuntimeChangesAffectSameHeldNotePoly)
+{
+    auto renderWithRuntimeDrives = [](float mixerDrive, float filterDrive) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode, 1.0f);
+        engine.setParameter(ParamId::Osc1Level, 1.0f);
+        engine.setParameter(ParamId::Osc2Level, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::FilterCutoff, 2000.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.2f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.noteOn(48, 100.0f);
+        engine.noteOn(55, 100.0f);
+        renderMono(engine, 4096);
+        engine.setParameter(ParamId::MixerDrive, mixerDrive);
+        engine.setParameter(ParamId::FilterDrive, filterDrive);
+        renderMono(engine, 4096);
+        return renderMono(engine, 8192);
+    };
+
+    const auto clean = renderWithRuntimeDrives(0.0f, 0.0f);
+    const auto driven = renderWithRuntimeDrives(3.0f, 3.0f);
+    EXPECT_GT(averageAbsDiff(driven), averageAbsDiff(clean) * 1.03)
+        << "Runtime drive updates must apply to active poly voices";
+}
+
+TEST(SynthEngineRealtimeParamTest, MixerDriveProgressionChangesToneAfterRmsMatching)
+{
+    auto renderHeldNoteAtDrive = [](float drive) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode, 0.0f);
+        engine.setParameter(ParamId::Osc1Waveform, 2.0f); // Saw
+        engine.setParameter(ParamId::Osc1Range, 3.0f);
+        engine.setParameter(ParamId::Osc1Level, 1.0f);
+        engine.setParameter(ParamId::Osc2Enabled, 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled, 0.0f);
+        engine.setParameter(ParamId::NoiseEnabled, 0.0f);
+        engine.setParameter(ParamId::NoiseLevel, 0.0f);
+        engine.setParameter(ParamId::AmpAttack, 0.001f);
+        engine.setParameter(ParamId::AmpSustain, 1.0f);
+        engine.setParameter(ParamId::FilterCutoff, 20000.0f);
+        engine.setParameter(ParamId::FilterResonance, 0.0f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::FilterDrive, 0.0f);
+        engine.setParameter(ParamId::LfoAmount, 0.0f);
+        engine.setParameter(ParamId::ModWheelAmount, 0.0f);
+        engine.setParameter(ParamId::MixerDrive, 0.0f);
+        engine.noteOn(48, 100.0f);
+        renderMono(engine, 4096);
+        engine.setParameter(ParamId::MixerDrive, drive);
+        renderMono(engine, 8192);
+        return renderMono(engine, 8192);
+    };
+
+    auto gainMatchedDiff = [](const std::vector<float>& reference, const std::vector<float>& candidate) {
+        const double refRms = rms(reference);
+        const double candRms = rms(candidate);
+        if (refRms <= 0.0 || candRms <= 0.0) return 0.0;
+
+        const double scale = refRms / candRms;
+        double diff = 0.0;
+        for (size_t i = 0; i < reference.size(); ++i)
+            diff += std::abs(static_cast<double>(reference[i]) - static_cast<double>(candidate[i]) * scale);
+        return diff / static_cast<double>(reference.size());
+    };
+
+    const auto d0 = renderHeldNoteAtDrive(0.0f);
+    const auto d1 = renderHeldNoteAtDrive(1.0f);
+    const auto d2 = renderHeldNoteAtDrive(2.0f);
+    const auto d3 = renderHeldNoteAtDrive(3.0f);
+
+    const double c1 = gainMatchedDiff(d0, d1);
+    const double c2 = gainMatchedDiff(d0, d2);
+    const double c3 = gainMatchedDiff(d0, d3);
+
+    EXPECT_GT(c1, 0.006) << "Drive 1 must affect final synth tone after RMS matching";
+    EXPECT_GT(c2, c1 * 0.98) << "Drive 2 must keep the final synth path strongly colored after Drive 1";
+    EXPECT_GT(c3, c2 * 0.98) << "Drive 3 must stay strongly colored without collapsing after Drive 2";
+}
+
+TEST(SynthEngineRealtimeParamTest, MainDriveProbeShowsLadderPressure)
+{
+    const auto open0 = probeDriveChain(0.0, 20000.0, 0.0);
+    const auto open1 = probeDriveChain(1.0, 20000.0, 0.0);
+    const auto open2 = probeDriveChain(2.0, 20000.0, 0.0);
+    const auto open3 = probeDriveChain(3.0, 20000.0, 0.0);
+
+    EXPECT_TRUE(open0.finite);
+    EXPECT_TRUE(open1.finite);
+    EXPECT_TRUE(open2.finite);
+    EXPECT_TRUE(open3.finite);
+    EXPECT_GT(open1.mixerRms, open0.mixerRms * 1.10)
+        << "Main Drive 1 must push mixer/ladder input RMS, not wait until max";
+    EXPECT_GT(open2.ladderOutputRms, open1.ladderOutputRms * 0.82)
+        << "Drive 2 must add growl/pressure without collapsing the open-filter output";
+    EXPECT_GT(open3.finalRms, open2.finalRms * 0.72)
+        << "Drive 3 must compress musically, not become smaller/thinner";
+    EXPECT_LE(open3.mixerPeak, 1.0);
+    EXPECT_LE(open3.ladderOutputPeak, 1.0);
+    EXPECT_LE(open3.finalPeak, 1.0);
+
+    const auto closed0 = probeDriveChain(0.0, 1000.0, 0.2);
+    const auto closed1 = probeDriveChain(1.0, 1000.0, 0.2);
+    const auto closed2 = probeDriveChain(2.0, 1000.0, 0.2);
+    const auto closed3 = probeDriveChain(3.0, 1000.0, 0.2);
+
+    EXPECT_TRUE(closed0.finite);
+    EXPECT_TRUE(closed1.finite);
+    EXPECT_TRUE(closed2.finite);
+    EXPECT_TRUE(closed3.finite);
+    EXPECT_GT(closed1.finalRms, closed0.finalRms * 0.70)
+        << "Closed-filter Drive 1 must remain present after ladder compression";
+    EXPECT_GT(closed2.ladderOutputRms, closed1.ladderOutputRms * 0.70)
+        << "Closed-filter Drive 2 must not choke the ladder output";
+    EXPECT_GT(closed3.finalRms, closed2.finalRms * 0.65)
+        << "Closed-filter Drive 3 must add pressure/compression without collapsing";
+    EXPECT_LE(closed3.ladderOutputPeak, 1.0);
+    EXPECT_LE(closed3.finalPeak, 1.0);
+}
+
+TEST(SynthEngineRealtimeParamTest, MainDriveLowMidGrowlDoesNotTurnIntoTrebleSpike)
+{
+    const auto d0 = probeLowMidGrowlPatch(0.0);
+    const auto d1 = probeLowMidGrowlPatch(1.0);
+    const auto d2 = probeLowMidGrowlPatch(2.0);
+    const auto d3 = probeLowMidGrowlPatch(3.0);
+
+    EXPECT_TRUE(d0.finite);
+    EXPECT_TRUE(d1.finite);
+    EXPECT_TRUE(d2.finite);
+    EXPECT_TRUE(d3.finite);
+
+    const double lowGrowth1 = d1.lowMidRms / std::max(d0.lowMidRms, 1.0e-9);
+    const double lowGrowth2 = d2.lowMidRms / std::max(d0.lowMidRms, 1.0e-9);
+    const double lowGrowth3 = d3.lowMidRms / std::max(d0.lowMidRms, 1.0e-9);
+    const double highGrowth3 = d3.highRms / std::max(d0.highRms, 1.0e-9);
+    const double ratio0 = d0.lowMidRms / std::max(d0.highRms, 1.0e-9);
+    const double ratio3 = d3.lowMidRms / std::max(d3.highRms, 1.0e-9);
+
+    EXPECT_GT(lowGrowth1, 0.85)
+        << "Drive 1 should keep the low-mid body audible in the growl patch";
+    EXPECT_GT(lowGrowth2, lowGrowth1 * 0.82)
+        << "Drive 2 should add pressure without hollowing the 80-500 Hz region";
+    EXPECT_GT(lowGrowth3, lowGrowth2 * 0.78)
+        << "Drive 3 should compress/growl without thinning out";
+    EXPECT_GT(lowGrowth3, highGrowth3 * 0.75)
+        << "Main Drive must favor low-mid density over extra high-band brightness";
+    EXPECT_GT(ratio3, ratio0 * 0.72)
+        << "Drive 3 should not become a treble-spike version of the clean patch";
+    EXPECT_LE(d3.finalPeak, 1.0);
 }
 
 TEST(SynthEngineAudioTest, LowNotePriorityStillControlsPitch)
@@ -567,12 +1122,14 @@ TEST(SynthEngineAudioTest, NoiseLevelAffectsOutputAndNoiseOffIsSilentWithoutOsci
     off.noteOn(45, 100.0f);
     EXPECT_LT(rms(renderMono(off, 4096)), 1.0e-6);
 
+    // Use MixerDrive=0 to test noise routing linearity without saturation compression.
     SynthEngine low;
     low.prepare(44100.0, 512);
     low.setNoiseSeed(7u);
     low.setParameter(ParamId::Osc1Enabled, 0.0f);
     low.setParameter(ParamId::Osc2Enabled, 0.0f);
     low.setParameter(ParamId::Osc3Enabled, 0.0f);
+    low.setParameter(ParamId::MixerDrive, 0.0f);
     low.setNoiseEnabled(true);
     low.setNoiseLevel(0.2);
     low.noteOn(45, 100.0f);
@@ -583,6 +1140,7 @@ TEST(SynthEngineAudioTest, NoiseLevelAffectsOutputAndNoiseOffIsSilentWithoutOsci
     high.setParameter(ParamId::Osc1Enabled, 0.0f);
     high.setParameter(ParamId::Osc2Enabled, 0.0f);
     high.setParameter(ParamId::Osc3Enabled, 0.0f);
+    high.setParameter(ParamId::MixerDrive, 0.0f);
     high.setNoiseEnabled(true);
     high.setNoiseLevel(1.0);
     high.noteOn(45, 100.0f);
@@ -602,9 +1160,9 @@ TEST(DSPArchV2Test, MixerDriveZeroIsNearClean)
     mixer.setSourceEnabled(SynthCore::MixerSource::Osc2, false);
     mixer.setSourceLevel(SynthCore::MixerSource::Osc1, 1.0);
 
-    // At drive=0, blend=0, output=mixerSum=input*0.45
+    // At drive=0, blend=0, output=mixerSum=input*0.55
     const double out = mixer.processSample(0.5, 0.0, 0.0, 0.0, 0.0);
-    EXPECT_NEAR(out, 0.5 * 0.45, 1e-9);
+    EXPECT_NEAR(out, 0.5 * 0.55, 1e-9);
 }
 
 TEST(DSPArchV2Test, MixerDriveChangesSignalCharacter)
@@ -1207,4 +1765,75 @@ TEST(DSPArchV2Test, MixerDriveHighNoteAliasingBounded)
             << ": high-frequency energy ratio " << ratio
             << " suggests aliasing / fizz at Drive 3";
     }
+}
+
+// ── Part 20 — AnalogDrift guard: must default to 0, must be forceable to 0 ───
+
+TEST(AnalogDriftTest, DefaultIsZero)
+{
+    // initPatchValue for AnalogDrift must return 0.0 — no hidden drift on clean init.
+    EXPECT_FLOAT_EQ(initPatchValue(ParamId::AnalogDrift), 0.0f);
+}
+
+TEST(AnalogDriftTest, FreshEngineHasZeroDrift)
+{
+    SynthEngine engine;
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::AnalogDrift), 0.0f);
+}
+
+TEST(AnalogDriftTest, SetNonZeroThenClearRestoresZero)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::AnalogDrift, 1.0f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::AnalogDrift), 1.0f);
+
+    engine.setParameter(ParamId::AnalogDrift, 0.0f);
+    EXPECT_FLOAT_EQ(engine.getParameter(ParamId::AnalogDrift), 0.0f);
+}
+
+// Simulate "old saved state had AnalogDrift=1.0, then host forces it to 0":
+// engine must treat AnalogDrift=0 as truly zero — Osc1 and Osc2 must then match.
+TEST(AnalogDriftTest, ForcedZeroAfterNonZeroMakesOscillatorsMatch)
+{
+    constexpr double sampleRate = 44100.0;
+    constexpr int    settle     = 4096;
+    constexpr int    frames     = static_cast<int>(sampleRate);
+
+    auto measureOscHz = [&](int oscToEnable, float drift) -> double {
+        SynthEngine engine;
+        engine.prepare(sampleRate, 512);
+        engine.setParameter(ParamId::AnalogDrift,     drift);
+        engine.setParameter(ParamId::AmpAttack,       0.001f);
+        engine.setParameter(ParamId::AmpSustain,      1.0f);
+        engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+        engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+        engine.setParameter(ParamId::LfoAmount,       0.0f);
+        engine.setParameter(ParamId::MixerDrive,      0.0f);
+        engine.setParameter(ParamId::FilterDrive,     0.0f);
+        engine.setParameter(ParamId::Osc1Enabled,     oscToEnable == 1 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc1Level,       oscToEnable == 1 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc2Enabled,     oscToEnable == 2 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc2Level,       oscToEnable == 2 ? 1.0f : 0.0f);
+        engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+        engine.setParameter(ParamId::Osc2Detune,      0.0f);
+        engine.setParameter(ParamId::Osc1Waveform,    2.0f); // Saw
+        engine.setParameter(ParamId::Osc2Waveform,    2.0f); // Saw
+        engine.setParameter(ParamId::Osc1Range,       3.0f); // 8'
+        engine.setParameter(ParamId::Osc2Range,       3.0f); // 8'
+        engine.noteOn(69, 100.0f); // A4 = 440 Hz
+        renderMono(engine, settle);
+        return measureHz(renderMono(engine, frames), sampleRate);
+    };
+
+    // Set drift=1.0 (simulates old saved state), then immediately clear to 0 (as
+    // the plugin layer does in pushParametersToSynth and setStateInformation).
+    // At drift=0 both oscillators must land within 0.1 Hz of each other at A4.
+    const double f1 = measureOscHz(1, 0.0f);
+    const double f2 = measureOscHz(2, 0.0f);
+    ASSERT_GT(f1, 0.0) << "Osc1 not producing audio";
+    ASSERT_GT(f2, 0.0) << "Osc2 not producing audio";
+    EXPECT_NEAR(f1, f2, 0.1)
+        << "At AnalogDrift=0: Osc1=" << f1 << " Hz, Osc2=" << f2
+        << " Hz — they must match within 0.1 Hz (hidden drift must be off)";
 }

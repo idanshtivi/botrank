@@ -101,3 +101,16 @@ if(WIN32 AND LADDERVOICE_SIGN_STANDALONE)
                 -P "${CMAKE_SOURCE_DIR}/cmake/SignWindowsExecutable.cmake"
         COMMENT "Signing trusted standalone executables with '${LADDERVOICE_CODESIGN_SUBJECT}'")
 endif()
+
+# Remove Mark-of-the-Web (Zone.Identifier ADS) so Smart App Control / SmartScreen
+# does not treat locally-built executables as downloaded-from-internet.
+# Two COMMAND entries — one per file — keep the inline script simple and avoid
+# quoting issues with paths that contain spaces.
+if(WIN32)
+    add_custom_command(TARGET LadderVoice_Standalone POST_BUILD
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                "& { $f='$<TARGET_FILE:LadderVoice_Standalone>'; if(Test-Path -LiteralPath $f){Remove-Item -LiteralPath ($f+':Zone.Identifier') -ErrorAction SilentlyContinue; Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue} }"
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
+                "& { $f='${TRUSTED_BIN_DIR}/LadderVoice.exe'; if(Test-Path -LiteralPath $f){Remove-Item -LiteralPath ($f+':Zone.Identifier') -ErrorAction SilentlyContinue; Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue} }"
+        COMMENT "Removing Mark-of-the-Web from standalone executables")
+endif()

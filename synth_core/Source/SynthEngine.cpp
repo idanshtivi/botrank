@@ -155,6 +155,7 @@ void SynthEngine::_applyParameterToVoice(SynthVoice& voice, ParamId id, float va
         break;
     case ParamId::MixerDrive:
         voice.mixer.setDrive(value);
+        voice.ladderFilter.setMainDrivePush(value);
         break;
     case ParamId::NoiseEnabled:
         voice.mixer.setSourceEnabled(MixerSource::Noise, value >= 0.5f);

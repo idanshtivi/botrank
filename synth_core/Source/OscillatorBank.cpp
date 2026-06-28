@@ -98,7 +98,7 @@ OscillatorBankOutput OscillatorBank::process()
             _driftRng ^= _driftRng >> 17;
             _driftRng ^= _driftRng << 5;
             for (int i = 0; i < 3; ++i) {
-                const uint32_t r = (_driftRng >> (i * 7)) ^ (_driftRng << (i * 3));
+                const uint32_t r = (_driftRng >> ((i + 1) * 7)) ^ (_driftRng << ((i + 1) * 3));
                 const double step = (static_cast<double>(static_cast<int32_t>(r)) / 2147483648.0)
                                     * _driftMaxCents * 0.12;
                 _driftCents[i] = std::clamp(_driftCents[i] + step,

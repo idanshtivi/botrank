@@ -54,6 +54,11 @@ namespace Fmt {
             || pid.containsIgnoreCase("release") || pid == "glideTime";
     }
 
+    static bool isLevel(const juce::String& pid)
+    {
+        return pid == "osc1Level" || pid == "osc2Level" || pid == "osc3Level" || pid == "noiseLevel";
+    }
+
     static juce::String time(double s)
     {
         return s < 1.0 ? juce::String(juce::roundToInt(s * 1000.0)) + " ms"
@@ -63,6 +68,7 @@ namespace Fmt {
     static juce::String value(const juce::String& pid, double v)
     {
         if (isTime(pid))                              return time(v);
+        if (isLevel(pid))                             return juce::String(juce::roundToInt(v * 100.0)) + "%";
         if (pid == "filterCutoff")                    return juce::String(juce::roundToInt(v)) + " Hz";
         if (pid.containsIgnoreCase("detune"))         return (v > 0.0 ? juce::String("+") : juce::String()) + juce::String(v, 2) + " st";
         if (pid == "pitchBendRange")                  return juce::String(v, 2) + " st";
@@ -83,6 +89,10 @@ namespace Fmt {
             if (t.endsWithIgnoreCase("s"))  return t.dropLastCharacters(1).trim().getDoubleValue();
             const double v = t.getDoubleValue();
             return v > 10.0 ? v / 1000.0 : v;
+        }
+        if (isLevel(pid)) {
+            const double value = t.endsWithChar('%') ? t.dropLastCharacters(1).trim().getDoubleValue() : t.getDoubleValue();
+            return value > 1.0 ? value / 100.0 : value;
         }
         if (pid == "filterCutoff" || pid == "lfoRate")
             return t.endsWithIgnoreCase("hz") ? t.dropLastCharacters(2).trim().getDoubleValue() : t.getDoubleValue();
@@ -302,6 +312,13 @@ juce::Slider& LadderVoiceAudioProcessorEditor::addKnob(const juce::String& text,
 {
     auto slider = std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
     slider->setName(parameterId);
+    const bool levelKnob = parameterId == "osc1Level" || parameterId == "osc2Level"
+        || parameterId == "osc3Level" || parameterId == "noiseLevel";
+    if (levelKnob) {
+        slider->setMouseDragSensitivity(360);
+        slider->setVelocityBasedMode(true);
+        slider->setVelocityModeParameters(0.55, 1, 0.04, true);
+    }
     int valueWidth = 62;
     if (parameterId == "filterCutoff") {
         valueWidth = 92;
@@ -638,7 +655,7 @@ void LadderVoiceAudioProcessorEditor::resized()
     // MIXER — section {800,104,150,240}
     // mixerDrive: knobBox 140×90 → render 90px, large strip (140≥100)
     setComponentBounds(sliders, s, {812, 156, 126,  88});      // [s10] mixerDrive
-    setComponentBounds(sliders, s, {814, 280, 118,  64});      // [s11] noiseLevel
+    setComponentBounds(sliders, s, {827, 270,  96,  74});      // [s11] noiseLevel
 
     // FILTER — section {966,104,192,260} — big Cutoff + secondary controls
     // Cutoff: knobBox 132×144 → render 132px large (~35% > 98px OSC knobs)

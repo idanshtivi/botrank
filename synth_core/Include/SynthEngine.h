@@ -87,7 +87,7 @@ inline float initPatchValue(ParamId id)
     case ParamId::Osc1Range:              return 3.0f; // 8'
     case ParamId::Osc2Range:              return 3.0f; // 8'
     case ParamId::Osc3Range:              return 3.0f; // 8'
-    case ParamId::Osc2Detune:             return 0.05f;
+    case ParamId::Osc2Detune:             return 0.0f;
     case ParamId::Osc3Detune:             return 0.0f;
     case ParamId::Osc3KeyboardTracking:   return 1.0f;
     case ParamId::MixerDrive:             return 1.0f;
@@ -208,6 +208,7 @@ private:
 
     // Power-supply sag state (populated in Milestone 7)
     float _railSag = 0.0f;
+
 };
 
 } // namespace SynthCore

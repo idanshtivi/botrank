@@ -31,8 +31,11 @@ public:
 
 private:
     double _sampleRate    = 44100.0;
-    double _levels[static_cast<int>(MixerSource::Count)] = {0.7, 0.4, 0.0, 0.0, 0.0};
+    double _targetLevels[static_cast<int>(MixerSource::Count)] = {0.7, 0.4, 0.0, 0.0, 0.0};
+    double _smoothedLevels[static_cast<int>(MixerSource::Count)] = {0.7, 0.4, 0.0, 0.0, 0.0};
     bool   _enabled[static_cast<int>(MixerSource::Count)] = {true, true, false, false, false};
+    double _levelAlpha      = 0.0;  // coefficient = exp(-1/(tau*fs))
+    bool   _levelsNeedSnap  = true; // snap on first processSample after init/reset
     double _drive           = 1.0;
     double _driveSmoothed   = 1.0;  // 1-pole LP toward _drive; eliminates zipper noise
     double _driveAlpha      = 0.0;  // coefficient = exp(-1/(tau*fs))
