@@ -67,7 +67,9 @@ double Mixer::processSample(double osc1, double osc2, double osc3, double noise,
     }
     const double md       = DriveUtils::normDrive(_driveSmoothed);
     const double driven   = DriveUtils::mixerDriveSaturate(mixerSum, md);
-    const double driveMix = DriveUtils::smoothstep01(0.015, 0.58, md);
+    // pow(md, 0.78) bows the blend curve toward Drive 1 (≈37% wet at Drive 1 vs V4's ≈31%);
+    // no floor so Drive 0 remains bit-clean.
+    const double driveMix = DriveUtils::smoothstep01(0.015, 1.0, std::pow(md, 0.78));
     double out = DriveUtils::lerp(mixerSum, driven, driveMix);
 
     if (!std::isfinite(out)) out = 0.0;

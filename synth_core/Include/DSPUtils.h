@@ -132,30 +132,45 @@ inline double mixerDriveSaturate(double input, double amount)
 {
     amount = clamp01(amount);
 
-    const double driveCurve = std::pow(amount, 0.82);
-    const double preGain = 1.0 + 12.5 * driveCurve;
-    const double x = input * preGain;
+    // Two-component preGain: 'early' gives immediate response at Drive 1;
+    // 'late' adds extra push in the upper range.
+    const double early   = std::pow(amount, 0.72);
+    const double late    = smoothstep01(0.35, 1.0, amount);
+    const double preGain = 1.0 + 3.8 * early + 2.3 * late;   // max ~7.1x at Drive 3
+    const double x       = input * preGain;
 
-    const double pushed = x + (0.10 * amount) * (x - std::tanh(0.58 * x) / 0.58);
-    const double warm = (1.08 - 0.10 * amount) * std::tanh(pushed / (1.08 - 0.10 * amount));
+    // Slightly relaxed from V4's 2.35 — lets Drive 3 breathe while staying poly-safe.
+    const double xp = std::clamp(x, -2.60, 2.60);
 
-    const double bias = 0.020 * amount;
-    const double asym = 0.044 * amount;
-    const double edgeInput = pushed + asym * pushed * pushed
-                           + (0.050 + 0.110 * amount) * pushed * pushed * pushed
-                           + bias;
-    double edge = std::tanh(edgeInput);
+    // Warm layer: normalised so slope ≈ 1 at origin — clean feel at low drive.
+    const double tanhNorm = std::tanh(0.92);
+    const double warm     = std::tanh(xp * 0.92) / tanhNorm;
+
+    // Edge layer: slightly richer than V4, still controlled.
+    const double edgeAmount = smoothstep01(0.40, 1.0, amount);
+    const double asym       = 0.017 * amount;
+    const double cubic      = 0.016 + 0.040 * edgeAmount;
+    const double bias       = 0.004 * amount;
+
+    const double shaped = xp + asym * xp * xp + cubic * xp * xp * xp + bias;
+    double edge = std::tanh(shaped);
     edge -= std::tanh(bias);
 
-    const double edgeMix = smoothstep01(0.18, 0.88, amount);
-    double y = lerp(warm, edge, edgeMix);
+    // Progressive blend: capped at 0.88 so Drive 3 stays musical, not harsh.
+    const double edgeMixRaw = 0.10 + 0.24 * early + 0.54 * edgeAmount;
+    const double edgeMix    = std::min(clamp01(edgeMixRaw), 0.88);
+    double wet = lerp(warm, edge, edgeMix);
 
-    const double bodyMix = 0.055 * amount * (1.0 - 0.25 * edgeMix);
-    y = lerp(y, input, bodyMix);
-    y = antiFizz(input, y, amount);
+    wet = antiFizz(input, wet, amount);
 
-    const double trim = 1.0 / (1.0 + 0.078 * (preGain - 1.0));
-    return y * trim;
+    // Body preserve: keeps low-mid presence as drive increases.
+    double y = wet + input * (0.030 * amount);
+
+    // Slightly lighter trim — Drive 3 must not feel smaller than Drive 2.
+    const double trim = 1.0 / (1.0 + 0.028 * (preGain - 1.0));
+    y *= trim;
+
+    return softLimit(y, 1.05);
 }
 
 } // namespace DriveUtils

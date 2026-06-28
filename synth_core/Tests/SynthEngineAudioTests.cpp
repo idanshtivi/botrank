@@ -1156,3 +1156,55 @@ TEST(TwoDriveFinalTest, InternalOutputColorLinkedToMainDriveIsBounded)
     EXPECT_GT(s.rms, 0.001)         << "Signal must be audible — not choked by output color";
     EXPECT_EQ(s.clippedSamples, 0)  << "Soft limiter must prevent any hard clipping";
 }
+
+// ── High-note aliasing / fizz audit ──────────────────────────────────────────
+// Cubic shaping can generate harmonics above Nyquist that fold back as digital
+// fizz.  Verify that high notes (C5/C6/C7) at maximum drive remain bounded,
+// finite, and audible — not exploding with alias energy.
+TEST(DSPArchV2Test, MixerDriveHighNoteAliasingBounded)
+{
+    // C5 = MIDI 72, C6 = 84, C7 = 96
+    for (int midiNote : {72, 84, 96}) {
+        SynthEngine engine;
+        engine.prepare(44100.0, 512);
+        engine.setParameter(ParamId::PlayMode,       0.0f); // Mono
+        engine.setParameter(ParamId::AmpSustain,     1.0f);
+        engine.setParameter(ParamId::AmpAttack,      0.001f);
+        engine.setParameter(ParamId::LfoAmount,      0.0f);
+        engine.setParameter(ParamId::ModWheelAmount, 0.0f);
+        engine.setParameter(ParamId::FilterEnvAmount,0.0f);
+        engine.setFilterCutoffHz(20000.0);
+        engine.setFilterResonance(0.0f);
+        engine.setParameter(ParamId::FilterDrive,    0.0f);
+        engine.setParameter(ParamId::Osc1Level,      1.0f);
+        engine.setParameter(ParamId::Osc2Enabled,    0.0f);
+        engine.setParameter(ParamId::Osc3Enabled,    0.0f);
+        engine.setParameter(ParamId::MixerDrive,     3.0f);
+        engine.noteOn(midiNote, 100.0f);
+        renderMono(engine, 4096); // settle past attack
+
+        const auto buf = renderMono(engine, 4096);
+        const auto s = statsFor(buf);
+
+        EXPECT_TRUE(s.finite) << "MIDI " << midiNote << ": NaN/Inf at Drive 3 open filter";
+        EXPECT_LE(s.peak, 1.0) << "MIDI " << midiNote << ": peak must stay bounded at Drive 3";
+        EXPECT_GT(s.rms, 0.02) << "MIDI " << midiNote << ": must be audible at Drive 3";
+
+        // High-frequency alias energy proxy: RMS of successive-sample differences
+        // normalised to signal RMS.  Clean saturation stays bounded; aliasing /
+        // fizz inflates this ratio well above what the fundamental supports.
+        // For a saw wave at C7 (2093 Hz, 44100 Hz sample rate) the max theoretical
+        // ratio from the fundamental alone is 2*sin(pi*2093/44100) ≈ 0.46.
+        // Harmonics raise it further but a ratio above 2.5 indicates alias fold-back.
+        double diffRmsSum = 0.0;
+        for (size_t i = 1; i < buf.size(); ++i) {
+            const double d = static_cast<double>(buf[i]) - buf[i - 1];
+            diffRmsSum += d * d;
+        }
+        const double diffRms = std::sqrt(diffRmsSum / static_cast<double>(buf.size() - 1));
+        const double ratio = (s.rms > 0.0) ? diffRms / s.rms : 0.0;
+        EXPECT_LT(ratio, 2.5) << "MIDI " << midiNote
+            << ": high-frequency energy ratio " << ratio
+            << " suggests aliasing / fizz at Drive 3";
+    }
+}
