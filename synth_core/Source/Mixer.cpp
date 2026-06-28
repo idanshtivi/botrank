@@ -66,8 +66,8 @@ double Mixer::processSample(double osc1, double osc2, double osc3, double noise,
         _driveSmoothed = _driveAlpha * _driveSmoothed + (1.0 - _driveAlpha) * _drive;
     }
     const double md       = DriveUtils::normDrive(_driveSmoothed);
-    const double driven   = DriveUtils::mainDriveSaturate(mixerSum, md);
-    const double driveMix = DriveUtils::smoothstep01(0.04, 0.78, md);
+    const double driven   = DriveUtils::mixerDriveSaturate(mixerSum, md);
+    const double driveMix = DriveUtils::smoothstep01(0.015, 0.58, md);
     double out = DriveUtils::lerp(mixerSum, driven, driveMix);
 
     if (!std::isfinite(out)) out = 0.0;

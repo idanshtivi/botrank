@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "../Include/Mixer.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
@@ -104,6 +105,7 @@ TEST(MixerTest, MainDriveHasClearCharacterRange)
         mixer.setSourceLevel(MixerSource::Osc1, 1.0);
         mixer.setSourceLevel(MixerSource::Osc2, 0.85);
 
+        std::array<double, 512> output {};
         double diffFromClean = 0.0;
         double peak = 0.0;
         for (int i = 0; i < 512; ++i) {
@@ -112,19 +114,34 @@ TEST(MixerTest, MainDriveHasClearCharacterRange)
             const double square = phase < 0.5 ? 1.0 : -1.0;
             const double clean = 0.45 * (saw + 0.85 * square);
             const double out = mixer.processSample(saw, square, 0.0, 0.0, 0.0);
+            output[static_cast<size_t>(i)] = out;
             diffFromClean += std::abs(out - clean);
             peak = std::max(peak, std::abs(out));
         }
 
-        return std::pair<double, double>(diffFromClean / 512.0, peak);
+        struct Result {
+            std::array<double, 512> output;
+            double diffFromClean;
+            double peak;
+        };
+
+        return Result { output, diffFromClean / 512.0, peak };
     };
 
+    const auto clean = render(0.0);
     const auto mid = render(1.5);
     const auto high = render(3.0);
 
-    EXPECT_GT(mid.first, 0.045);
-    EXPECT_GT(high.first, mid.first * 1.15);
-    EXPECT_LE(high.second, 1.0);
+    double midToHigh = 0.0;
+    for (int i = 0; i < 512; ++i)
+        midToHigh += std::abs(high.output[static_cast<size_t>(i)] - mid.output[static_cast<size_t>(i)]);
+    midToHigh /= 512.0;
+
+    EXPECT_GT(mid.diffFromClean, 0.085);
+    EXPECT_GT(high.diffFromClean, 0.18);
+    EXPECT_GT(midToHigh, 0.08);
+    EXPECT_LE(clean.peak, 1.0);
+    EXPECT_LE(high.peak, 1.0);
 }
 
 TEST(MixerTest, ResetIsSafeAndDeterministic)

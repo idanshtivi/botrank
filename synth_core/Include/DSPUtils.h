@@ -128,6 +128,36 @@ inline double mainDriveSaturate(double input, double amount)
     return y * trim;
 }
 
+inline double mixerDriveSaturate(double input, double amount)
+{
+    amount = clamp01(amount);
+
+    const double driveCurve = std::pow(amount, 0.82);
+    const double preGain = 1.0 + 12.5 * driveCurve;
+    const double x = input * preGain;
+
+    const double pushed = x + (0.10 * amount) * (x - std::tanh(0.58 * x) / 0.58);
+    const double warm = (1.08 - 0.10 * amount) * std::tanh(pushed / (1.08 - 0.10 * amount));
+
+    const double bias = 0.020 * amount;
+    const double asym = 0.044 * amount;
+    const double edgeInput = pushed + asym * pushed * pushed
+                           + (0.050 + 0.110 * amount) * pushed * pushed * pushed
+                           + bias;
+    double edge = std::tanh(edgeInput);
+    edge -= std::tanh(bias);
+
+    const double edgeMix = smoothstep01(0.18, 0.88, amount);
+    double y = lerp(warm, edge, edgeMix);
+
+    const double bodyMix = 0.055 * amount * (1.0 - 0.25 * edgeMix);
+    y = lerp(y, input, bodyMix);
+    y = antiFizz(input, y, amount);
+
+    const double trim = 1.0 / (1.0 + 0.078 * (preGain - 1.0));
+    return y * trim;
+}
+
 } // namespace DriveUtils
 
 } // namespace SynthCore
