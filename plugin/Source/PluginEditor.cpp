@@ -312,13 +312,9 @@ juce::Slider& LadderVoiceAudioProcessorEditor::addKnob(const juce::String& text,
 {
     auto slider = std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
     slider->setName(parameterId);
-    const bool levelKnob = parameterId == "osc1Level" || parameterId == "osc2Level"
-        || parameterId == "osc3Level" || parameterId == "noiseLevel";
-    if (levelKnob) {
-        slider->setMouseDragSensitivity(360);
-        slider->setVelocityBasedMode(true);
-        slider->setVelocityModeParameters(0.55, 1, 0.04, true);
-    }
+    slider->setMouseDragSensitivity(360);
+    slider->setVelocityBasedMode(true);
+    slider->setVelocityModeParameters(0.55, 1, 0.04, true);
     int valueWidth = 62;
     if (parameterId == "filterCutoff") {
         valueWidth = 92;
