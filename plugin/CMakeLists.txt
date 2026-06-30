@@ -68,18 +68,12 @@ endif()
 
 set_target_properties(LadderVoice_Standalone
     PROPERTIES
+        OUTPUT_NAME "LadderVoice"
         RUNTIME_OUTPUT_DIRECTORY "${TRUSTED_BIN_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_DEBUG "${TRUSTED_BIN_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_RELEASE "${TRUSTED_BIN_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${TRUSTED_BIN_DIR}"
         RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${TRUSTED_BIN_DIR}")
-
-add_custom_command(TARGET LadderVoice_Standalone POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${TRUSTED_BIN_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "$<TARGET_FILE:LadderVoice_Standalone>"
-            "${TRUSTED_BIN_DIR}/LadderVoice.exe"
-    COMMENT "Creating no-space trusted launch copy: ${TRUSTED_BIN_DIR}/LadderVoice.exe")
 
 if(WIN32 AND LADDERVOICE_SIGN_STANDALONE)
     if(NOT LADDERVOICE_SIGNTOOL_EXECUTABLE)
@@ -94,14 +88,7 @@ if(WIN32 AND LADDERVOICE_SIGN_STANDALONE)
                 "-DCERT_PFX_PASSWORD=${LADDERVOICE_CODESIGN_PFX_PASSWORD}"
                 "-DFILE_TO_SIGN=$<TARGET_FILE:LadderVoice_Standalone>"
                 -P "${CMAKE_SOURCE_DIR}/cmake/SignWindowsExecutable.cmake"
-        COMMAND "${CMAKE_COMMAND}"
-                "-DSIGNTOOL_EXE=${LADDERVOICE_SIGNTOOL_EXECUTABLE}"
-                "-DCERT_SUBJECT=${LADDERVOICE_CODESIGN_SUBJECT}"
-                "-DCERT_PFX=${LADDERVOICE_CODESIGN_PFX}"
-                "-DCERT_PFX_PASSWORD=${LADDERVOICE_CODESIGN_PFX_PASSWORD}"
-                "-DFILE_TO_SIGN=${TRUSTED_BIN_DIR}/LadderVoice.exe"
-                -P "${CMAKE_SOURCE_DIR}/cmake/SignWindowsExecutable.cmake"
-        COMMENT "Signing trusted standalone executables with '${LADDERVOICE_CODESIGN_SUBJECT}'")
+        COMMENT "Signing trusted standalone executable with '${LADDERVOICE_CODESIGN_SUBJECT}'")
 endif()
 
 # Remove Mark-of-the-Web (Zone.Identifier ADS) so Smart App Control / SmartScreen
@@ -112,7 +99,5 @@ if(WIN32)
     add_custom_command(TARGET LadderVoice_Standalone POST_BUILD
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
                 "& { $f='$<TARGET_FILE:LadderVoice_Standalone>'; if(Test-Path -LiteralPath $f){Remove-Item -LiteralPath ($f+':Zone.Identifier') -ErrorAction SilentlyContinue; Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue} }"
-        COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
-                "& { $f='${TRUSTED_BIN_DIR}/LadderVoice.exe'; if(Test-Path -LiteralPath $f){Remove-Item -LiteralPath ($f+':Zone.Identifier') -ErrorAction SilentlyContinue; Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue} }"
-        COMMENT "Removing Mark-of-the-Web from standalone executables")
+        COMMENT "Removing Mark-of-the-Web from standalone executable")
 endif()
