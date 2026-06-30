@@ -78,8 +78,16 @@ double Mixer::processSample(double osc1, double osc2, double osc3, double noise,
     }
 
     const double md = DriveUtils::normDrive(_driveSmoothed);
-    const double headroom = DriveUtils::lerp(0.55, 0.78, std::pow(md, 0.65));
-    const double mixerSum = sum * headroom;
+    int activeCount = 0;
+    for (int i = 0; i < static_cast<int>(MixerSource::Count); ++i) {
+        if (_enabled[i] && _smoothedLevels[i] > 0.001)
+            ++activeCount;
+    }
+
+    const double headroom = DriveUtils::lerp(0.48, 0.68, std::pow(md, 0.70));
+    const double activeCountComp = 1.0 / std::sqrt(static_cast<double>(std::max(1, activeCount)));
+    const double sourceComp = DriveUtils::lerp(1.0, activeCountComp, 0.35);
+    const double mixerSum = sum * headroom * sourceComp;
     const double driven = DriveUtils::mixerDriveSaturate(mixerSum, md);
 
     // Progressive exciter blend, but tied to the source Level control. A low
@@ -94,6 +102,7 @@ double Mixer::processSample(double osc1, double osc2, double osc3, double noise,
     const double levelBoundedDriven = std::clamp(driven, -drivenLimit, drivenLimit);
     double out = DriveUtils::lerp(mixerSum, levelBoundedDriven, levelAwareDriveMix);
 
+    out = DriveUtils::softLimit(out, 0.98);
     if (!std::isfinite(out)) out = 0.0;
     return std::clamp(out, -1.0, 1.0);
 }

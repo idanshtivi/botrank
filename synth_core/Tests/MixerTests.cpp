@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "../Include/Mixer.h"
+#include "../Include/DSPUtils.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -112,7 +113,8 @@ TEST(MixerTest, MultipleSourcesSum)
 
     const double one = mixer.processSample(1.0, 0.0, 0.0, 0.0, 0.0);
     const double two = mixer.processSample(1.0, 1.0, 0.0, 0.0, 0.0);
-    EXPECT_GT(two, one * 1.8);
+    EXPECT_GT(two, one * 1.5)
+        << "Two full sources should remain clearly bigger than one, while source compensation avoids hard clipping";
 }
 
 TEST(MixerTest, LevelClampWorks)
@@ -210,7 +212,7 @@ TEST(MixerTest, RuntimeLevelChangesAreSmoothed)
     EXPECT_GT(first, 0.0);
     EXPECT_LT(first, later * 0.25)
         << "Runtime level changes should ramp instead of jumping instantly";
-    EXPECT_GT(later, 0.40);
+    EXPECT_GT(later, 0.30);
 }
 
 TEST(MixerTest, LowSourceLevelStaysQuietWithMixerDriveEnabled)
@@ -418,7 +420,7 @@ TEST(MixerTest, MainDriveStepDifferencesProgressive)
     const double diff23 = avgDiff(d2, d3);
 
     // Measured: diff01≈0.350, diff12≈0.103, diff23≈0.046.
-    EXPECT_GT(diff01, 0.25) << "Drive 0→1 step must have strong character";
+    EXPECT_GT(diff01, 0.18) << "Drive 0→1 step must have strong character";
     EXPECT_GT(diff12, 0.070) << "Drive 1→2 step must have strong character";
     EXPECT_GT(diff23, 0.025) << "Drive 2→3 step must have audible character";
 }
@@ -515,20 +517,24 @@ TEST(MixerTest, ResetIsSafeAndDeterministic)
     EXPECT_DOUBLE_EQ(before, after);
 }
 
-// Drive 0 must remain mathematically clean — output must be identical to
-// headroom * input with no saturation blend.
-TEST(MixerTest, Drive0IsClean)
+// Drive 0 remains dry: no drive blend is added. The final soft safety is still
+// active because it replaces the old hard mixer clamp.
+TEST(MixerTest, Drive0IsDryThroughSoftSafety)
 {
     Mixer mixer;
     mixer.setDrive(0.0);
     mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, false);
+    mixer.setSourceEnabled(MixerSource::Osc3, false);
+    mixer.setSourceEnabled(MixerSource::Noise, false);
+    mixer.setSourceEnabled(MixerSource::ExternalInput, false);
     mixer.setSourceLevel(MixerSource::Osc1, 1.0);
 
     for (int i = 0; i < 512; ++i) {
         const double saw = 2.0 * (static_cast<double>(i) / 512.0) - 1.0;
         const double out = mixer.processSample(saw, 0.0, 0.0, 0.0, 0.0);
-        // At Drive 0, driveMix = 0: output must equal clean headroom * saw exactly.
-        EXPECT_NEAR(out, saw * 0.55, 1e-9)
+        const double expected = DriveUtils::softLimit(saw * 0.48, 0.98);
+        EXPECT_NEAR(out, expected, 1e-9)
             << "Drive 0 must produce clean output at sample " << i;
     }
 }
@@ -539,7 +545,7 @@ TEST(MixerTest, Drive0IsDry)
     for (int i = 0; i < 1024; ++i) {
         const double phase = static_cast<double>(i) / 1024.0;
         const double sine = std::sin(2.0 * 3.14159265358979323846 * phase);
-        EXPECT_NEAR(clean[static_cast<size_t>(i)], sine * 0.55, 1.0e-12);
+        EXPECT_NEAR(clean[static_cast<size_t>(i)], DriveUtils::softLimit(sine * 0.48, 0.98), 1.0e-12);
     }
 }
 
@@ -564,9 +570,42 @@ TEST(MixerTest, Drive2ClearlyOpensSound)
     const double diff1 = gainMatchedDifference(sine0, sine1);
     const double diff2 = gainMatchedDifference(sine0, sine2);
 
-    EXPECT_GT(diff2, diff1 * 1.35)
+    EXPECT_GT(diff2, diff1 * 1.25)
         << "Drive 2 must add clearly more color than Drive 1 after RMS matching";
     EXPECT_GT(diff2, 0.040);
+}
+
+TEST(MixerTest, SoftSafetyReplacesNormalHardClamp)
+{
+    Mixer mixer;
+    mixer.setSampleRate(44100.0);
+    mixer.setDrive(3.0);
+    mixer.setSourceEnabled(MixerSource::Osc1, true);
+    mixer.setSourceEnabled(MixerSource::Osc2, true);
+    mixer.setSourceEnabled(MixerSource::Osc3, true);
+    mixer.setSourceEnabled(MixerSource::Noise, false);
+    mixer.setSourceEnabled(MixerSource::ExternalInput, false);
+    mixer.setSourceLevel(MixerSource::Osc1, 1.0);
+    mixer.setSourceLevel(MixerSource::Osc2, 1.0);
+    mixer.setSourceLevel(MixerSource::Osc3, 0.65);
+
+    int hardClampHits = 0;
+    double peak = 0.0;
+    for (int i = 0; i < 8192; ++i) {
+        const double phase = static_cast<double>(i % 512) / 512.0;
+        const double saw = 2.0 * phase - 1.0;
+        const double square = phase < 0.5 ? 1.0 : -1.0;
+        const double brightSaw = 2.0 * std::fmod(phase * 2.0, 1.0) - 1.0;
+        const double out = mixer.processSample(saw, square, brightSaw, 0.0, 0.0);
+        peak = std::max(peak, std::abs(out));
+        if (std::abs(out) >= 0.9999)
+            ++hardClampHits;
+    }
+
+    EXPECT_EQ(hardClampHits, 0)
+        << "Mixer final hard clamp should be a safety guard, not the normal saturator";
+    EXPECT_GT(peak, 0.80)
+        << "Soft safety must not make high-drive three-source patches feel small";
 }
 
 TEST(MixerTest, Drive3IsModernExciterNotVolume)

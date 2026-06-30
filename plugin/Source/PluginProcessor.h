@@ -45,5 +45,13 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void pushParametersToSynth();
 
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    uint64_t _traceBlockIndex    = 0;
+    uint64_t _traceSessionSample = 0;
+    uint32_t _traceCrackleIndex  = 0;
+    float    _tracePrevSample    = 0.0f;
+    uint64_t _traceLastNoteSample = 0;
+#endif
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LadderVoiceAudioProcessor)
 };

@@ -8,6 +8,11 @@
 
 namespace SynthCore {
 
+enum class VoiceStartMode {
+    Normal,
+    StolenRelease
+};
+
 // Per-note signal chain: OscillatorBank → Mixer → LadderFilter → VCA.
 // Envelopes (loudness + filter contour) live here so they travel with the note.
 // Pitch is fed in each sample from the engine's VoiceController.
@@ -17,7 +22,7 @@ public:
     void prepare(double sampleRate, int blockSize);
 
     // Trigger/release envelopes. Pitch is controlled externally via processSample args.
-    void noteOn(int midiNote, float velocity);
+    void noteOn(int midiNote, float velocity, VoiceStartMode mode = VoiceStartMode::Normal);
     void noteOff();
 
     // Run one sample through the entire per-voice chain.
@@ -65,6 +70,14 @@ private:
     // sample of a newly allocated poly voice from entering as a discontinuity.
     double _startDeclickGain = 1.0;
     double _startDeclickStep = 1.0;
+
+    double _lastOutput = 0.0;
+    double _stealResidual = 0.0;
+    int _stealResidualSamplesRemaining = 0;
+    int _stealResidualTotalSamples = 0;
+
+    int _fadeSamplesForMs(double ms) const;
+    void _beginStolenReleaseRestart();
 
     static double _midiFromHz(double hz);
 };

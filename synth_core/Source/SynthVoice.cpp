@@ -21,13 +21,40 @@ void SynthVoice::prepare(double sampleRate, int /*blockSize*/)
     _startDeclickStep  = 1.0 / (0.002 * _sampleRate);
 }
 
-void SynthVoice::noteOn(int /*midiNote*/, float /*velocity*/)
+int SynthVoice::_fadeSamplesForMs(double ms) const
+{
+    return std::max(1, static_cast<int>(std::lround(_sampleRate * ms / 1000.0)));
+}
+
+void SynthVoice::_beginStolenReleaseRestart()
+{
+    _stealResidual = std::isfinite(_lastOutput) ? _lastOutput : 0.0;
+    _stealResidualTotalSamples = _fadeSamplesForMs(3.0);
+    _stealResidualSamplesRemaining = _stealResidualTotalSamples;
+
+    ladderFilter.reset();
+    loudnessContour.reset();
+    filterContour.reset();
+    vca.reset();
+    _dcBlockX = 0.0;
+    _dcBlockY = 0.0;
+    _pitchIsFirstSample = true;
+    _startDeclickGain = 0.0;
+    _startDeclickStep = 1.0 / static_cast<double>(_fadeSamplesForMs(3.0));
+}
+
+void SynthVoice::noteOn(int /*midiNote*/, float /*velocity*/, VoiceStartMode mode)
 {
     const bool wasActive = loudnessContour.isActive();
+    if (mode == VoiceStartMode::StolenRelease)
+        _beginStolenReleaseRestart();
+
     loudnessContour.gateOn();
     filterContour.gateOn();
-    if (!wasActive)
+    if (mode == VoiceStartMode::Normal && !wasActive) {
         _startDeclickGain = 0.0;
+        _startDeclickStep = 1.0 / (0.002 * _sampleRate);
+    }
 }
 
 void SynthVoice::noteOff()
@@ -47,6 +74,7 @@ float SynthVoice::processSample(double pitchHz, double currentMidiNote)
         oscillators.process();
         loudnessContour.processSample();
         filterContour.processSample();
+        _lastOutput = 0.0;
         return 0.0f;
     }
 
@@ -81,6 +109,15 @@ float SynthVoice::processSample(double pitchHz, double currentMidiNote)
         amplified *= _startDeclickGain;
         _startDeclickGain = std::min(1.0, _startDeclickGain + _startDeclickStep);
     }
+    if (_stealResidualSamplesRemaining > 0 && _stealResidualTotalSamples > 0) {
+        const double t = static_cast<double>(_stealResidualSamplesRemaining)
+                       / static_cast<double>(_stealResidualTotalSamples);
+        amplified += _stealResidual * t;
+        --_stealResidualSamplesRemaining;
+    }
+    if (!std::isfinite(amplified))
+        amplified = 0.0;
+    _lastOutput = amplified;
     return static_cast<float>(amplified);
 }
 
@@ -103,6 +140,11 @@ void SynthVoice::reset()
     _pitchSmoothedHz    = 440.0;
     _pitchIsFirstSample = true;
     _startDeclickGain   = 1.0;
+    _startDeclickStep   = 1.0 / (0.002 * _sampleRate);
+    _lastOutput = 0.0;
+    _stealResidual = 0.0;
+    _stealResidualSamplesRemaining = 0;
+    _stealResidualTotalSamples = 0;
 }
 
 void SynthVoice::resetAudioChainState()

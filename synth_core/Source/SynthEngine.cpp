@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 
 namespace SynthCore {
 
@@ -342,23 +343,99 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         return;
     }
 
+    // Capture pre-allocation voice state for the diagnostic logger
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    AllocPayload allocPay{};
+    allocPay.sessionSample = _sessionSample;
+    allocPay.blockIndex    = PolyTraceLogger::instance().currentBlockIndex();
+    allocPay.requestedNote = static_cast<uint8_t>(std::clamp(midiNote, 0, 127));
+    int tracActiveBefore = 0, tracHeldBefore = 0, tracRelBefore = 0;
+    for (size_t k = 0; k < _polyVoices.size(); ++k) {
+        auto& vi    = allocPay.voicesBefore[k];
+        vi.active   = _polyVoices[k].isActive() ? 1u : 0u;
+        vi.held     = _polyHeld[k] ? 1u : 0u;
+        vi.midiNote = static_cast<uint8_t>(_polyMidiNotes[k] & 0x7F);
+        vi.envStage = static_cast<uint8_t>(_polyVoices[k].loudnessContour.currentStage());
+        vi.envValue = static_cast<float>(_polyVoices[k].loudnessContour.getCurrentValue());
+        if (vi.active) { ++tracActiveBefore; if (!vi.held) ++tracRelBefore; }
+        if (vi.held)   ++tracHeldBefore;
+    }
+#endif
+
     const int voiceIndex = _allocatePolyVoice(std::clamp(midiNote, 0, 127));
-    _polyMidiNotes[static_cast<size_t>(voiceIndex)] = std::clamp(midiNote, 0, 127);
-    _polyHeld[static_cast<size_t>(voiceIndex)] = true;
-    _polyAges[static_cast<size_t>(voiceIndex)] = ++_voiceAgeCounter;
+    const size_t voiceSlot = static_cast<size_t>(voiceIndex);
+    const bool wasHeld = _polyHeld[voiceSlot];
+    const bool wasActive = _polyVoices[voiceSlot].isActive();
+    const bool isReleaseTailReuse = !wasHeld && wasActive;
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    // Determine allocation reason from pre-alloc state
+    {
+        const auto& vb = allocPay.voicesBefore[voiceSlot];
+        AllocReason reason;
+        const int clampedNote = std::clamp(midiNote, 0, 127);
+        if (vb.held && static_cast<int>(vb.midiNote) == clampedNote)
+            reason = AllocReason::SameNote;
+        else if (!vb.held && !vb.active)
+            reason = AllocReason::FreeSlot;
+        else if (!vb.held)
+            reason = AllocReason::ReleaseTail;
+        else
+            reason = AllocReason::Oldest;
+        allocPay.chosenVoice = static_cast<uint8_t>(voiceSlot);
+        allocPay.reason      = static_cast<uint8_t>(reason);
+        allocPay.wasReset    = wasActive ? 0u : 1u;
+        POLY_TRACE_PUSH_ALLOC(allocPay);
+    }
+#endif
+
+    _polyMidiNotes[voiceSlot] = std::clamp(midiNote, 0, 127);
+    _polyHeld[voiceSlot] = true;
+    _polyAges[voiceSlot] = ++_voiceAgeCounter;
 
     // Only randomize phases when the poly voice was silent — same click-prevention
     // logic as mono: jumping phase mid-release causes a discontinuity in the output.
     advanceRng(_noteStartRng);
-    if (!_polyVoices[static_cast<size_t>(voiceIndex)].isActive()) {
+    if (!wasActive) {
         const uint32_t seed = _noteStartRng
             ^ (static_cast<uint32_t>(voiceIndex + 1) * 2654435761u)
             ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
-        _polyVoices[static_cast<size_t>(voiceIndex)].oscillators.randomizePhases(seed);
-        _polyVoices[static_cast<size_t>(voiceIndex)].resetAudioChainState();
+        _polyVoices[voiceSlot].oscillators.randomizePhases(seed);
+        _polyVoices[voiceSlot].resetAudioChainState();
     }
 
-    _polyVoices[static_cast<size_t>(voiceIndex)].noteOn(midiNote, velocity);
+    _polyVoices[voiceSlot].noteOn(
+        midiNote,
+        velocity,
+        isReleaseTailReuse ? VoiceStartMode::StolenRelease : VoiceStartMode::Normal);
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    {
+        // Count post-allocation voice state
+        int tracActiveAfter = 0, tracHeldAfter = 0, tracRelAfter = 0;
+        for (size_t k = 0; k < _polyVoices.size(); ++k) {
+            if (_polyVoices[k].isActive()) { ++tracActiveAfter; if (!_polyHeld[k]) ++tracRelAfter; }
+            if (_polyHeld[k]) ++tracHeldAfter;
+        }
+        NotePayload notePay{};
+        notePay.sessionSample      = _sessionSample;
+        notePay.blockIndex         = PolyTraceLogger::instance().currentBlockIndex();
+        notePay.sampleOffset       = 0;
+        notePay.midiNote           = static_cast<uint8_t>(std::clamp(midiNote, 0, 127));
+        notePay.velocity           = static_cast<uint8_t>(std::clamp(static_cast<int>(velocity), 0, 127));
+        notePay.voiceIndex         = static_cast<uint8_t>(voiceSlot);
+        notePay.wasHeld            = wasHeld ? 1u : 0u;
+        notePay.wasActive          = wasActive ? 1u : 0u;
+        notePay.isReleaseTailReuse = isReleaseTailReuse ? 1u : 0u;
+        notePay.activeBefore       = static_cast<uint8_t>(tracActiveBefore);
+        notePay.heldBefore         = static_cast<uint8_t>(tracHeldBefore);
+        notePay.releasingBefore    = static_cast<uint8_t>(tracRelBefore);
+        notePay.activeAfter        = static_cast<uint8_t>(tracActiveAfter);
+        notePay.heldAfter          = static_cast<uint8_t>(tracHeldAfter);
+        notePay.releasingAfter     = static_cast<uint8_t>(tracRelAfter);
+        POLY_TRACE_PUSH_NOTE_ON(notePay);
+    }
+#endif
 }
 
 void SynthEngine::noteOff(int midiNote)
@@ -376,6 +453,27 @@ void SynthEngine::noteOff(int midiNote)
         if (_polyHeld[i] && _polyMidiNotes[i] == note) {
             _polyHeld[i] = false;
             _polyVoices[i].noteOff();
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+            {
+                int activeAfter = 0, heldAfter = 0, relAfter = 0;
+                for (size_t k = 0; k < _polyVoices.size(); ++k) {
+                    if (_polyVoices[k].isActive()) { ++activeAfter; if (!_polyHeld[k]) ++relAfter; }
+                    if (_polyHeld[k]) ++heldAfter;
+                }
+                NotePayload np{};
+                np.sessionSample   = _sessionSample;
+                np.blockIndex      = PolyTraceLogger::instance().currentBlockIndex();
+                np.midiNote        = static_cast<uint8_t>(note);
+                np.voiceIndex      = static_cast<uint8_t>(i);
+                np.wasHeld         = 1u;
+                np.wasActive       = _polyVoices[i].isActive() ? 1u : 0u;
+                np.activeAfter     = static_cast<uint8_t>(activeAfter);
+                np.heldAfter       = static_cast<uint8_t>(heldAfter);
+                np.releasingAfter  = static_cast<uint8_t>(relAfter);
+                POLY_TRACE_PUSH_NOTE_OFF(np);
+            }
+#endif
         }
     }
 }
@@ -579,6 +677,7 @@ float SynthEngine::processSample()
 
     double out = _output.processSample(voiceSample);
     if (!std::isfinite(out)) out = 0.0;
+    ++_sessionSample;
     return static_cast<float>(std::clamp(out, -1.0, 1.0));
 }
 
@@ -614,6 +713,7 @@ void SynthEngine::reset()
     _output.reset();
     _railSag              = 0.0f;
     _polyHeadroomSmoothed = 1.0f;
+    _sessionSample        = 0;
     for (auto& s : _smoothers) {
         s = ParamSmoother{};
         s.setSampleRate(_sampleRate);
@@ -654,5 +754,32 @@ void SynthEngine::_allPolyNotesOff()
         _polyVoices[i].noteOff();
     }
 }
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+void SynthEngine::fillVoiceSnapshots(SnapshotPayload* out, uint32_t crackleIndex) const
+{
+    for (size_t i = 0; i < _polyVoices.size(); ++i) {
+        const auto& v = _polyVoices[i];
+        auto& s = out[i];
+        std::memset(&s, 0, sizeof(s));
+        s.sessionSample  = _sessionSample;
+        s.blockIndex     = PolyTraceLogger::instance().currentBlockIndex();
+        s.crackleIndex   = crackleIndex;
+        s.voiceIndex     = static_cast<uint8_t>(i);
+        s.isActive       = v.isActive() ? 1u : 0u;
+        s.isHeld         = _polyHeld[i] ? 1u : 0u;
+        s.isReleasing    = (v.isActive() && !_polyHeld[i]) ? 1u : 0u;
+        s.midiNote       = static_cast<uint8_t>(_polyMidiNotes[i] & 0x7F);
+        s.loudnessStage  = static_cast<uint8_t>(v.loudnessContour.currentStage());
+        s.filterStage    = static_cast<uint8_t>(v.filterContour.currentStage());
+        s.loudnessValue  = static_cast<float>(v.loudnessContour.getCurrentValue());
+        s.filterValue    = static_cast<float>(v.filterContour.getCurrentValue());
+        s.ladderStage0   = v.ladderFilter.stageValue(0);
+        s.ladderStage1   = v.ladderFilter.stageValue(1);
+        s.ladderStage2   = v.ladderFilter.stageValue(2);
+        s.ladderStage3   = v.ladderFilter.stageValue(3);
+    }
+}
+#endif
 
 } // namespace SynthCore

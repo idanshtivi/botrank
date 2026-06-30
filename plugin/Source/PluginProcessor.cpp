@@ -1,5 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#if LADDERVOICE_ENABLE_POLY_TRACE
+#include <chrono>
+#include <cmath>
+#endif
 
 namespace {
 float value(juce::AudioProcessorValueTreeState& state, const char* id)
@@ -213,10 +217,21 @@ void LadderVoiceAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 {
     synth.prepare(sampleRate, samplesPerBlock);
     pushParametersToSynth();
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    _traceBlockIndex    = 0;
+    _traceSessionSample = 0;
+    _traceCrackleIndex  = 0;
+    _tracePrevSample    = 0.0f;
+    _traceLastNoteSample = 0;
+    SynthCore::PolyTraceLogger::instance().start();
+#endif
 }
 
 void LadderVoiceAudioProcessor::releaseResources()
 {
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    SynthCore::PolyTraceLogger::instance().stop();
+#endif
 }
 
 bool LadderVoiceAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -290,9 +305,18 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     buffer.clear();
     pushParametersToSynth();
 
-    const auto numSamples = buffer.getNumSamples();
+    const auto numSamples  = buffer.getNumSamples();
     const auto numChannels = buffer.getNumChannels();
     int currentSample = 0;
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    auto& logger = SynthCore::PolyTraceLogger::instance();
+    const double sr = getSampleRate();
+    POLY_TRACE_SET_CTX(_traceBlockIndex, _traceSessionSample,
+                       static_cast<uint32_t>(numSamples),
+                       static_cast<float>(sr));
+    const auto tBlockStart = std::chrono::high_resolution_clock::now();
+#endif
 
     auto renderUntil = [&](int endSample) {
         endSample = juce::jlimit(0, numSamples, endSample);
@@ -308,8 +332,14 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 
         const auto message = metadata.getMessage();
         if (message.isNoteOn()) {
+#if LADDERVOICE_ENABLE_POLY_TRACE
+            _traceLastNoteSample = _traceSessionSample + static_cast<uint64_t>(currentSample);
+#endif
             synth.noteOn(message.getNoteNumber(), message.getVelocity() * 127.0f);
         } else if (message.isNoteOff()) {
+#if LADDERVOICE_ENABLE_POLY_TRACE
+            _traceLastNoteSample = _traceSessionSample + static_cast<uint64_t>(currentSample);
+#endif
             synth.noteOff(message.getNoteNumber());
         } else if (message.isPitchWheel()) {
             const auto normalized = (static_cast<double>(message.getPitchWheelValue()) - 8192.0) / 8192.0;
@@ -320,6 +350,94 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     }
 
     renderUntil(numSamples);
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+    if (logger.isActive() && numSamples > 0) {
+        // Measure block wall-clock time
+        const auto tBlockEnd = std::chrono::high_resolution_clock::now();
+        const auto blockTimeUs = static_cast<uint32_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(tBlockEnd - tBlockStart).count());
+        const float blockBudgetUs = static_cast<float>(numSamples) / static_cast<float>(sr) * 1.0e6f;
+        const float cpuPct = blockBudgetUs > 0.0f ? blockTimeUs / blockBudgetUs * 100.0f : 0.0f;
+
+        // Scan output buffer for peak, RMS, and max sample-to-sample delta
+        const float* readPtr = buffer.getReadPointer(0);
+        float peak = 0.0f, sumSq = 0.0f;
+        float maxDelta = 0.0f;
+        int   maxDeltaOff = 0;
+        float prev = _tracePrevSample;
+        for (int i = 0; i < numSamples; ++i) {
+            const float s = readPtr[i];
+            const float d = std::abs(s - prev);
+            if (d > maxDelta) { maxDelta = d; maxDeltaOff = i; }
+            const float a = std::abs(s);
+            if (a > peak) peak = a;
+            sumSq += s * s;
+            prev = s;
+        }
+        _tracePrevSample = prev;
+        const float blockRms = std::sqrt(sumSq / static_cast<float>(numSamples));
+
+        // Update rolling average delta (used for crackle ratio detection)
+        const float avgDelta = logger.recentAvgDelta();
+        logger.updateRecentAvgDelta(maxDelta);
+
+        // Push block trace event
+        SynthCore::BlockPayload bp{};
+        bp.sessionSample  = _traceSessionSample;
+        bp.blockIndex     = _traceBlockIndex;
+        bp.blockSize      = static_cast<uint32_t>(numSamples);
+        bp.sampleRate     = static_cast<float>(sr);
+        bp.finalPeak      = peak;
+        bp.finalRms       = blockRms;
+        bp.maxDelta       = maxDelta;
+        bp.maxDeltaOffset = static_cast<uint16_t>(maxDeltaOff < 65535 ? maxDeltaOff : 65535);
+        bp.blockTimeUs    = blockTimeUs;
+        bp.cpuPercent     = cpuPct;
+        bp.droppedEvents  = logger.droppedCount();
+        logger.pushBlock(bp);
+
+        // Crackle detection: absolute threshold OR ratio above recent average
+        const bool aboveAbs   = maxDelta > SynthCore::PolyTraceLogger::kAbsoluteThreshold;
+        const bool aboveRatio = avgDelta > 0.002f &&
+                                maxDelta > avgDelta * SynthCore::PolyTraceLogger::kRatioThreshold;
+        if (aboveAbs || aboveRatio) {
+            // Capture the two samples straddling the max delta
+            float prevAtMax = 0.0f, curAtMax = 0.0f;
+            if (maxDeltaOff > 0) {
+                prevAtMax = readPtr[maxDeltaOff - 1];
+                curAtMax  = readPtr[maxDeltaOff];
+            } else if (numSamples > 1) {
+                prevAtMax = _tracePrevSample; // approximation
+                curAtMax  = readPtr[0];
+            }
+
+            SynthCore::CracklePayload cp{};
+            cp.sessionSample      = _traceSessionSample + static_cast<uint64_t>(maxDeltaOff);
+            cp.blockIndex         = _traceBlockIndex;
+            cp.sampleOffset       = static_cast<uint32_t>(maxDeltaOff);
+            cp.crackleIndex       = _traceCrackleIndex;
+            cp.maxDelta           = maxDelta;
+            cp.prevSample         = prevAtMax;
+            cp.curSample          = curAtMax;
+            cp.recentAvgDelta     = avgDelta;
+            cp.lastNoteEventSample = _traceLastNoteSample;
+            cp.droppedEvents      = logger.droppedCount();
+            logger.pushCrackle(cp);
+
+            // Capture per-voice state snapshot at crackle time
+            SynthCore::SnapshotPayload snaps[SynthCore::kPolyVoiceCount];
+            synth.fillVoiceSnapshots(snaps, _traceCrackleIndex);
+            for (int vi = 0; vi < SynthCore::kPolyVoiceCount; ++vi)
+                logger.pushSnapshot(snaps[vi]);
+
+            ++_traceCrackleIndex;
+        }
+    }
+
+    _traceSessionSample += static_cast<uint64_t>(numSamples);
+    ++_traceBlockIndex;
+#endif
 }
 
 juce::AudioProcessorEditor* LadderVoiceAudioProcessor::createEditor()

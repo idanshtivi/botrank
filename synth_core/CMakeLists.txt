@@ -24,6 +24,11 @@ else()
     )
 endif()
 
+# ── Poly diagnostic logger (compile-time gate) ────────────────────────────────
+option(LADDERVOICE_ENABLE_POLY_TRACE
+    "Enable live poly-crackle diagnostic tracing (writes CSV files at runtime when LADDERVOICE_POLY_TRACE=1 env var is set)"
+    OFF)
+
 # ── Core library (header-only interface + compiled sources) ───────────────────
 add_library(SynthCoreLib STATIC
     Source/SynthEngine.cpp
@@ -40,7 +45,15 @@ add_library(SynthCoreLib STATIC
     Source/Vca.cpp
     Source/OutputStage.cpp
     Source/DSPUtils.cpp
+    Source/PolyTraceLogger.cpp
 )
+
+if(LADDERVOICE_ENABLE_POLY_TRACE)
+    target_compile_definitions(SynthCoreLib PUBLIC LADDERVOICE_ENABLE_POLY_TRACE=1)
+    message(STATUS "PolyTraceLogger: ENABLED (runtime gate: env LADDERVOICE_POLY_TRACE=1)")
+else()
+    message(STATUS "PolyTraceLogger: disabled (pass -DLADDERVOICE_ENABLE_POLY_TRACE=ON to enable)")
+endif()
 
 target_include_directories(SynthCoreLib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Include

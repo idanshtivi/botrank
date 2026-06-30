@@ -4,6 +4,7 @@
 #include "OutputStage.h"
 #include "DSPUtils.h"
 #include "Lfo.h"
+#include "PolyTraceLogger.h"
 #include <array>
 #include <cstdint>
 #include <cstddef>
@@ -215,6 +216,17 @@ private:
     float _polyHeadroomSmoothed = 1.0f;
     float _polyHeadroomCoeff    = 0.0f; // computed in _propagateSampleRate()
 
+    // Global sample counter — incremented each processSample() call.
+    // Used by diagnostic logger to timestamp note events.
+    uint64_t _sessionSample = 0;
+
+#if LADDERVOICE_ENABLE_POLY_TRACE
+public:
+    // Fill 4-element array with per-voice snapshot data for the crackle logger.
+    // Safe to call from the audio thread only (reads mutable DSP state).
+    void fillVoiceSnapshots(SnapshotPayload* out, uint32_t crackleIndex) const;
+private:
+#endif
 };
 
 } // namespace SynthCore

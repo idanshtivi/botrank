@@ -13,6 +13,7 @@ public:
     void setMainDrivePush(double drive);
     void reset();
     double processSample(double input, double filterEnvelopeValue, double keyboardMidiNote);
+    float stageValue(int i) const { return (i >= 0 && i < 4) ? static_cast<float>(_stage[i]) : 0.0f; }
 
 private:
     double _sampleRate = 44100.0;
