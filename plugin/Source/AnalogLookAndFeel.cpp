@@ -11,6 +11,39 @@ const auto accentGold = juce::Colour(0xff96783c);
 const auto valueFill = juce::Colour(0xff514a3c);
 const auto valueText = juce::Colour(0xffebe8d7);
 const auto softBorder = juce::Colour(0xff736e5f);
+
+// Draws text with explicit per-character pixel tracking using GlyphArrangement.
+// JUCE 8 removed Font::getStringWidth; GlyphArrangement is the correct measurement API.
+static void drawTrackedText(juce::Graphics& g, const juce::String& text,
+                             float x, float y, float w, float h,
+                             float trackPx, juce::Justification just)
+{
+    if (text.isEmpty()) return;
+    const juce::Font font = g.getCurrentFont();
+
+    juce::GlyphArrangement ga;
+    ga.addLineOfText(font, text, 0.0f, 0.0f);
+
+    const int n = ga.getNumGlyphs();
+    if (n == 0) return;
+
+    // Push each glyph right by accumulated tracking (i * trackPx)
+    for (int i = 1; i < n; ++i)
+        ga.moveRangeOfGlyphs(i, -1, trackPx, 0.0f);
+
+    const float totalW = ga.getBoundingBox(0, n, false).getWidth();
+
+    float startX = x;
+    if (just.testFlags(juce::Justification::horizontallyCentred))
+        startX = x + (w - totalW) * 0.5f;
+    else if (just.testFlags(juce::Justification::right))
+        startX = x + w - totalW;
+
+    // Baseline = top of text area + vertical centre offset + ascent
+    const float baselineY = y + (h - font.getHeight()) * 0.5f + font.getAscent();
+    ga.moveRangeOfGlyphs(0, -1, startX, baselineY);
+    ga.draw(g);
+}
 }
 
 AnalogLookAndFeel::AnalogLookAndFeel()
@@ -193,45 +226,366 @@ void AnalogLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
 void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                                          bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
-    juce::ignoreUnused(shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
-    auto r = button.getLocalBounds().toFloat().reduced(3.0f);
-    auto textArea = r;
-    auto switchArea = textArea.removeFromLeft(38.0f).withSizeKeepingCentre(28.0f, 30.0f);
-    textArea.removeFromLeft(3.0f);
-    const bool on = button.getToggleState();
+    const auto bounds = button.getLocalBounds().toFloat();
+    const bool isOn  = button.getToggleState();
+    const bool hover = shouldDrawButtonAsHighlighted;
+    const bool down  = shouldDrawButtonAsDown;
 
-    g.setColour(juce::Colour(0x70000000));
-    g.fillRoundedRectangle(switchArea.translated(0.0f, 2.0f), 5.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4a4a43), switchArea.getX(), switchArea.getY(),
-                                           juce::Colour(0xff050505), switchArea.getRight(), switchArea.getBottom(), false));
-    g.fillRoundedRectangle(switchArea, 5.0f);
-    g.setColour(accentGold.withAlpha(0.72f));
-    g.drawRoundedRectangle(switchArea.reduced(0.5f), 5.0f, 0.95f);
+    // Housing size tiers: xlarge (h≥78) → rocker switch, medium (h≥22) → push button, small → rocker switch
+    const bool xlarge = bounds.getHeight() >= 78.0f;
+    const bool medium = !xlarge && bounds.getHeight() >= 22.0f;
+    const float houW = xlarge ? 40.0f : 28.0f;
+    const float houH = juce::jmin(xlarge ? 88.0f : 40.0f, bounds.getHeight() - 2.0f);
+    auto hou = juce::Rectangle<float>(
+        bounds.getX() + 2.0f,
+        bounds.getCentreY() - houH * 0.5f,
+        houW, houH);
+    // Push button moves on press; rocker switch stays fixed — toggle happens on release
+    if (down && medium) hou = hou.translated(0.4f, 1.0f);
+    const float houCr = 2.5f;
 
-    auto well = switchArea.reduced(5.0f, 5.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff050505), well.getX(), well.getY(),
-                                           juce::Colour(0xff1c1c18), well.getRight(), well.getBottom(), false));
-    g.fillRoundedRectangle(well, 3.0f);
+    // MEDIUM: Vintage push button — square bakelite frame + dark face + amber LED pill, label above
+    if (medium)
+    {
+        const bool pressed = isOn || down;
+        const float frameCr = 4.5f;
+        const float faceCr  = 3.5f;
 
-    auto cap = well.withTrimmedTop(on ? 2.0f : well.getHeight() * 0.45f)
-                   .withTrimmedBottom(on ? well.getHeight() * 0.45f : 2.0f);
-    if (on) {
-        g.setColour(juce::Colour(0x65ffbc33));
-        g.fillEllipse(well.withSizeKeepingCentre(13.0f, 13.0f).translated(0.0f, -4.0f));
+        // Label above the square frame
+        const float labelH = 18.0f;
+        const float availH = bounds.getHeight() - labelH - 1.0f;
+        const float frameSize = juce::jmin(bounds.getWidth() - 4.0f, availH);
+        const auto frame = juce::Rectangle<float>(frameSize, frameSize)
+            .withCentre({ bounds.getCentreX(),
+                          bounds.getY() + labelH + 1.0f + frameSize * 0.5f });
+
+        // LABEL
+        g.setColour(button.isEnabled() ? juce::Colour(0xff1a1814) : juce::Colour(0xff77756c));
+        g.setFont(uiFont(12.5f, juce::Font::bold));
+        g.drawFittedText(button.getButtonText().toUpperCase(),
+                         juce::Rectangle<float>(bounds.getX(), bounds.getY(),
+                                                bounds.getWidth(), labelH).toNearestInt(),
+                         juce::Justification::centred, 1, 0.85f);
+
+        // Snap to pixel grid for crisp rendering
+        const auto fr = frame.toNearestInt().toFloat();
+
+        // Drop shadow
+        g.setColour(juce::Colours::black.withAlpha(pressed ? 0.32f : 0.80f));
+        g.fillRoundedRectangle(fr.translated(pressed ? 1.0f : 2.0f, pressed ? 1.0f : 3.5f).expanded(1.2f), frameCr + 1.0f);
+
+        // FRAME — bakelite, pixel-crisp
+        {
+            // Original bakelite warm-brown gradient
+            juce::ColourGradient fg(
+                juce::Colour(0xff3c3028), fr.getX(), fr.getY(),
+                juce::Colour(0xff1a1410), fr.getX(), fr.getBottom(), false);
+            fg.addColour(0.50, juce::Colour(0xff24201a));
+            g.setGradientFill(fg);
+            g.fillRoundedRectangle(fr, frameCr);
+
+            // Outer black border — 1.5px crisp
+            g.setColour(juce::Colour(0xff050402));
+            g.drawRoundedRectangle(fr.reduced(0.75f), frameCr, 1.5f);
+
+            // Bronze/brass inlay — 1.2px (not 0.9px) for visible crispness
+            g.setColour(juce::Colour(0xffb08840).withAlpha(hover ? 0.90f : 0.75f));
+            g.drawRoundedRectangle(fr.reduced(1.8f), frameCr - 0.8f, 1.2f);
+
+            // All 4 bevel edges drawn as explicit lines (avoids rounded-rect blur on sides)
+            const float bx1 = fr.getX()    + frameCr;
+            const float bx2 = fr.getRight() - frameCr;
+            const float by1 = fr.getY()    + frameCr;
+            const float by2 = fr.getBottom() - frameCr;
+            // Top light
+            g.setColour(juce::Colours::white.withAlpha(0.30f));
+            g.drawLine(bx1, fr.getY()+1.5f, bx2, fr.getY()+1.5f, 1.2f);
+            // Left light (slightly fainter)
+            g.setColour(juce::Colours::white.withAlpha(0.16f));
+            g.drawLine(fr.getX()+1.5f, by1, fr.getX()+1.5f, by2, 1.0f);
+            // Bottom shadow
+            g.setColour(juce::Colours::black.withAlpha(0.78f));
+            g.drawLine(bx1, fr.getBottom()-1.5f, bx2, fr.getBottom()-1.5f, 1.5f);
+            // Right shadow
+            g.setColour(juce::Colours::black.withAlpha(0.58f));
+            g.drawLine(fr.getRight()-1.5f, by1, fr.getRight()-1.5f, by2, 1.2f);
+        }
+
+        // PUSH FACE — snapped square inset from frame
+        const auto face = fr.reduced(5.0f).toNearestInt().toFloat();
+        {
+            if (pressed)
+            {
+                // Sunken — darker, inner shadow top+left
+                juce::ColourGradient fg2(
+                    juce::Colour(0xff0c0a08), face.getX(), face.getY(),
+                    juce::Colour(0xff1c1814), face.getX(), face.getBottom(), false);
+                g.setGradientFill(fg2);
+                g.fillRoundedRectangle(face, faceCr);
+                g.setColour(juce::Colours::black.withAlpha(0.60f));
+                g.drawLine(face.getX()+2, face.getY()+1.5f, face.getRight()-2, face.getY()+1.5f, 1.5f);
+                g.drawLine(face.getX()+1.5f, face.getY()+2, face.getX()+1.5f, face.getBottom()-2, 1.2f);
+                g.setColour(juce::Colours::white.withAlpha(0.07f));
+                g.drawLine(face.getX()+2, face.getBottom()-1.5f, face.getRight()-2, face.getBottom()-1.5f, 1.0f);
+            }
+            else
+            {
+                // Raised — lighter at top, darker at bottom
+                juce::ColourGradient fg2(
+                    juce::Colour(0xff2a2420), face.getX(), face.getY(),
+                    juce::Colour(0xff131110), face.getX(), face.getBottom(), false);
+                fg2.addColour(0.40, juce::Colour(0xff1c1814));
+                g.setGradientFill(fg2);
+                g.fillRoundedRectangle(face, faceCr);
+                // Centred top sheen
+                {
+                    juce::ColourGradient sheen(
+                        juce::Colours::white.withAlpha(0.12f), face.getCentreX(), face.getY(),
+                        juce::Colours::transparentBlack,        face.getCentreX(), face.getY() + face.getHeight() * 0.42f, false);
+                    g.setGradientFill(sheen);
+                    g.fillRoundedRectangle(face, faceCr);
+                }
+                // Crisp 4-side bevel
+                g.setColour(juce::Colours::white.withAlpha(hover ? 0.18f : 0.11f));
+                g.drawLine(face.getX()+2, face.getY()+1.5f, face.getRight()-2, face.getY()+1.5f, 1.0f);
+                g.drawLine(face.getX()+1.5f, face.getY()+2, face.getX()+1.5f, face.getBottom()-2, 0.8f);
+                g.setColour(juce::Colours::black.withAlpha(0.72f));
+                g.drawLine(face.getX()+2, face.getBottom()-1.5f, face.getRight()-2, face.getBottom()-1.5f, 1.4f);
+                g.drawLine(face.getRight()-1.5f, face.getY()+2, face.getRight()-1.5f, face.getBottom()-2, 1.1f);
+            }
+            g.setColour(juce::Colour(0xff050504));
+            g.drawRoundedRectangle(face.reduced(0.75f), faceCr, 1.5f);
+        }
+
+        // AMBER LED PILL — centred near top of face, pixel-snapped
+        {
+            const float pillW = face.getWidth() * 0.40f;
+            const float pillH = juce::jmin(5.5f, face.getHeight() * 0.22f);
+            const float pillCr = pillH * 0.5f;
+            const auto pill = juce::Rectangle<float>(pillW, pillH)
+                .withCentre({face.getCentreX(), face.getY() + face.getHeight() * 0.26f})
+                .toNearestInt().toFloat();
+
+            // Dark socket surround — always visible
+            g.setColour(juce::Colour(0xff080706));
+            g.fillRoundedRectangle(pill.expanded(1.2f, 0.8f), pillCr + 0.8f);
+
+            if (isOn)
+            {
+                // Lamp fill — warm amber base
+                g.setColour(juce::Colour(0xffdd8800));
+                g.fillRoundedRectangle(pill, pillCr);
+                // Brightness gradient — lighter at top centre
+                {
+                    juce::ColourGradient lg(
+                        juce::Colour(0x90ffdd66), pill.getCentreX(), pill.getY(),
+                        juce::Colours::transparentBlack, pill.getCentreX(), pill.getBottom(), false);
+                    g.setGradientFill(lg);
+                    g.fillRoundedRectangle(pill, pillCr);
+                }
+                // Tiny white specular spot
+                g.setColour(juce::Colours::white.withAlpha(0.70f));
+                g.fillEllipse(pill.getCentreX() - 1.8f, pill.getY() + pillH * 0.18f, 3.5f, 1.8f);
+            }
+            else
+            {
+                // Unlit lamp — very dark brown
+                g.setColour(juce::Colour(0xff1e160a));
+                g.fillRoundedRectangle(pill, pillCr);
+            }
+        }
+
+        return;
     }
-    g.setGradientFill(juce::ColourGradient(on ? juce::Colour(0xffd8a64d) : juce::Colour(0xff77766f),
-                                           cap.getX(), cap.getY(),
-                                           on ? juce::Colour(0xff4b2e0f) : juce::Colour(0xff242421),
-                                           cap.getRight(), cap.getBottom(), false));
-    g.fillRoundedRectangle(cap, 2.5f);
-    g.setColour(juce::Colour(0x99000000));
-    g.drawRoundedRectangle(cap, 2.5f, 1.0f);
 
+    // LAYER 1: CAST SHADOW
+    if (medium)
+    {
+        g.setColour(juce::Colours::black.withAlpha(down ? 0.35f : 0.82f));
+        g.fillRoundedRectangle(hou.translated(2.5f, down ? 2.0f : 4.0f).expanded(1.5f), houCr + 1.0f);
+    }
+    else
+    {
+        g.setColour(juce::Colours::black.withAlpha(0.28f));
+        g.fillRoundedRectangle(hou.translated(1.0f, 2.0f).expanded(0.5f), houCr + 0.5f);
+    }
+
+    // LAYER 2: BAKELITE FRAME — warm dark brown, clearly different from black well
+    {
+        juce::ColourGradient hg(
+            juce::Colour(0xff3c3028), hou.getX(), hou.getY(),
+            juce::Colour(0xff1a1410), hou.getX(), hou.getBottom(), false);
+        hg.addColour(0.50, juce::Colour(0xff24201a));
+        g.setGradientFill(hg);
+        g.fillRoundedRectangle(hou, houCr);
+
+        g.setColour(juce::Colour(0xff080604));
+        g.drawRoundedRectangle(hou.reduced(0.5f), houCr, 1.5f);
+
+        // EDGE WEAR — visible warm bronze/brass line
+        g.setColour(juce::Colour(0xffb08840).withAlpha(hover ? 0.80f : 0.65f));
+        g.drawRoundedRectangle(hou.reduced(1.0f), houCr, 0.8f);
+
+        // Top-left bevel highlight
+        g.setColour(juce::Colours::white.withAlpha(hover ? 0.38f : 0.28f));
+        g.drawLine(hou.getX() + 2.0f, hou.getY() + 1.0f,
+                   hou.getRight() - 2.0f, hou.getY() + 1.0f, 1.3f);
+        g.setColour(juce::Colours::white.withAlpha(hover ? 0.22f : 0.15f));
+        g.drawLine(hou.getX() + 1.0f, hou.getY() + 2.0f,
+                   hou.getX() + 1.0f, hou.getBottom() - 2.0f, 1.0f);
+
+        // Bottom-right shadow bevel
+        g.setColour(juce::Colours::black.withAlpha(0.75f));
+        g.drawLine(hou.getX() + 2.0f, hou.getBottom() - 1.0f,
+                   hou.getRight() - 2.0f, hou.getBottom() - 1.0f, 1.5f);
+        g.drawLine(hou.getRight() - 1.0f, hou.getY() + 2.0f,
+                   hou.getRight() - 1.0f, hou.getBottom() - 2.0f, 1.3f);
+    }
+
+    // LAYER 3: RECESSED WELL — pure black cavity
+    const auto well = hou.reduced(5.0f, 5.0f);
+    const float wellCr = 1.5f;
+    {
+        g.setColour(juce::Colour(0xff000000));
+        g.fillRoundedRectangle(well, wellCr);
+        g.setColour(juce::Colours::black.withAlpha(0.90f));
+        g.fillRoundedRectangle(well.withHeight(well.getHeight() * 0.28f), wellCr);
+        g.drawRoundedRectangle(well.reduced(0.3f), wellCr, 1.1f);
+    }
+
+    // LAYER 4: PIVOT ROCKER LEVER
+    // Lever ~12% narrower/shorter than well — track stays full size
+    auto lev = well.reduced(3.0f, 5.5f);
+    // ON = "I" (top) pressed down → lever shifts down; OFF = "O" (bottom) pressed down → lever shifts up
+    lev = lev.translated(0.0f, isOn ? 3.0f : -3.0f);
+    const float levCr = 1.5f;
+    const float pivotPos = 0.46f;
+
+    // Contact shadow
+    g.setColour(juce::Colours::black.withAlpha(isOn ? 0.65f : 0.40f));
+    g.fillRoundedRectangle(lev.translated(1.2f, isOn ? 1.2f : 2.5f).expanded(0.8f), levCr + 0.5f);
+
+    // Lever base fill
+    g.setColour(juce::Colour(0xff1e1c18));
+    g.fillRoundedRectangle(lev, levCr);
+
+    // Tilt shadow — on the pressed/down end
+    {
+        const float shadowH = lev.getHeight() * 0.55f;
+        if (isOn)
+        {
+            // ON: top pressed down → shadow at top
+            auto shadowZone = lev.withHeight(shadowH);
+            juce::ColourGradient sg(
+                juce::Colours::black.withAlpha(0.70f), shadowZone.getX(), shadowZone.getY(),
+                juce::Colours::black.withAlpha(0.0f),  shadowZone.getX(), shadowZone.getBottom(), false);
+            g.setGradientFill(sg);
+            g.fillRoundedRectangle(shadowZone, levCr);
+        }
+        else
+        {
+            // OFF: bottom pressed down → shadow at bottom
+            auto shadowZone = lev.withTrimmedTop(lev.getHeight() - shadowH);
+            juce::ColourGradient sg(
+                juce::Colours::black.withAlpha(0.0f),  shadowZone.getX(), shadowZone.getY(),
+                juce::Colours::black.withAlpha(0.70f), shadowZone.getX(), shadowZone.getBottom(), false);
+            g.setGradientFill(sg);
+            g.fillRoundedRectangle(shadowZone, levCr);
+        }
+    }
+
+    // Lever border
+    g.setColour(juce::Colours::black.withAlpha(0.90f));
+    g.drawRoundedRectangle(lev.reduced(0.4f), levCr, 1.0f);
+
+    // Specular on raised edge
+    const float specAlpha = hover ? 0.42f : 0.32f;
+    if (isOn)
+    {
+        // ON: bottom raised → specular at bottom
+        g.setColour(juce::Colours::white.withAlpha(specAlpha));
+        g.drawLine(lev.getX() + 2.0f, lev.getBottom() - 0.8f,
+                   lev.getRight() - 2.0f, lev.getBottom() - 0.8f, 2.2f);
+        g.setColour(juce::Colours::white.withAlpha(specAlpha * 0.5f));
+        g.drawLine(lev.getX() + 3.0f, lev.getBottom() - 2.5f,
+                   lev.getRight() - 3.0f, lev.getBottom() - 2.5f, 1.2f);
+    }
+    else
+    {
+        // OFF: top raised → specular at top
+        g.setColour(juce::Colours::white.withAlpha(specAlpha));
+        g.drawLine(lev.getX() + 2.0f, lev.getY() + 0.8f,
+                   lev.getRight() - 2.0f, lev.getY() + 0.8f, 2.2f);
+        g.setColour(juce::Colours::white.withAlpha(specAlpha * 0.5f));
+        g.drawLine(lev.getX() + 3.0f, lev.getY() + 2.5f,
+                   lev.getRight() - 3.0f, lev.getY() + 2.5f, 1.2f);
+    }
+
+    // Pivot crease
+    {
+        const float py = lev.getY() + lev.getHeight() * pivotPos;
+        g.setColour(juce::Colours::black.withAlpha(isOn ? 0.55f : 0.35f));
+        g.drawLine(lev.getX() + 1.5f, py, lev.getRight() - 1.5f, py, 1.0f);
+    }
+    g.setColour(juce::Colours::black.withAlpha(0.62f));
+    g.drawLine(lev.getX() + 2.5f, lev.getBottom() - 1.0f,
+               lev.getRight() - 2.5f, lev.getBottom() - 1.0f, 1.1f);
+
+    // I/O markings — debossed, xlarge only
+    if (xlarge)
+    {
+        const float cx    = lev.getCentreX();
+        const float alpha = 0.36f;
+
+        // "I" — short vertical line, upper quarter of lever
+        {
+            const float iy  = lev.getY()  + lev.getHeight() * 0.13f;
+            const float iy2 = lev.getY()  + lev.getHeight() * 0.27f;
+            g.setColour(juce::Colours::black.withAlpha(alpha * 0.9f));
+            g.drawLine(cx + 0.7f, iy + 0.7f, cx + 0.7f, iy2 + 0.7f, 1.3f);
+            g.setColour(juce::Colours::white.withAlpha(alpha));
+            g.drawLine(cx, iy, cx, iy2, 1.3f);
+        }
+
+        // "O" — small circle, lower quarter of lever
+        {
+            const float oR  = lev.getWidth() * 0.13f;
+            const float oCY = lev.getBottom() - lev.getHeight() * 0.20f;
+            g.setColour(juce::Colours::black.withAlpha(alpha * 0.9f));
+            g.drawEllipse(cx - oR + 0.7f, oCY - oR + 0.7f, oR * 2.0f, oR * 2.0f, 1.2f);
+            g.setColour(juce::Colours::white.withAlpha(alpha));
+            g.drawEllipse(cx - oR, oCY - oR, oR * 2.0f, oR * 2.0f, 1.2f);
+        }
+    }
+
+    // LABEL (xlarge and small rocker switches only — medium returns early above)
     g.setColour(button.isEnabled() ? juce::Colour(0xff151511) : juce::Colour(0xff77756c));
-    g.setFont(uiFont(10.3f, juce::Font::bold));
-    g.drawFittedText(button.getButtonText().toUpperCase(),
-                     textArea.toNearestInt().reduced(1, 0),
-                     juce::Justification::centredLeft, 1, 0.82f);
+    if (xlarge)
+    {
+        g.setFont(uiFont(10.3f, juce::Font::bold));
+        // Centred above the housing for large switches
+        const auto textBounds = juce::Rectangle<float>(
+            hou.getX() - 4.0f,
+            hou.getY() - 16.0f,
+            houW + 8.0f,
+            13.0f);
+        g.drawFittedText(button.getButtonText().toUpperCase(),
+                         textBounds.toNearestInt(),
+                         juce::Justification::centred, 1, 0.85f);
+    }
+    else
+    {
+        g.setFont(uiFont(10.3f, juce::Font::bold));
+        // To the right of the housing for standard switches
+        const auto textBounds = juce::Rectangle<float>(
+            bounds.getX() + houW + 7.0f,
+            hou.getY(),
+            bounds.getWidth() - houW - 7.0f,
+            houH);
+        g.drawFittedText(button.getButtonText().toUpperCase(),
+                         textBounds.toNearestInt(),
+                         juce::Justification::centredLeft, 1, 0.85f);
+    }
 }
 
 void AnalogLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
@@ -288,9 +642,11 @@ void AnalogLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& butt
     juce::ignoreUnused(shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
     const bool lightAction = button.getButtonText().equalsIgnoreCase("INIT");
     g.setColour(lightAction ? juce::Colour(0xff16130d) : juce::Colour(0xffffdf9a));
-    g.setFont(uiFont(13.0f, juce::Font::bold));
-    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(4, 1),
-                     juce::Justification::centred, 1, 0.85f);
+    g.setFont(juce::Font(uiFont(13.0f, juce::Font::bold)));
+    const auto r = button.getLocalBounds().reduced(4, 1).toFloat();
+    drawTrackedText(g, button.getButtonText(),
+                    r.getX(), r.getY(), r.getWidth(), r.getHeight(),
+                    0.85f, juce::Justification::centred);
 }
 
 void AnalogLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
@@ -331,4 +687,36 @@ void AnalogLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& l
     label.setJustificationType(juce::Justification::centredLeft);
     label.setColour(juce::Label::textColourId, box.isEnabled() ? juce::Colour(0xffffdf9a) : juce::Colour(0xff77756c));
     label.setInterceptsMouseClicks(false, false);
+}
+
+void AnalogLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar& /*scrollbar*/,
+                                      int x, int y, int width, int height,
+                                      bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
+                                      bool isMouseOver, bool isMouseDown)
+{
+    // Track — dark, matches the recessed list background
+    const auto track = juce::Rectangle<int>(x, y, width, height).toFloat();
+    g.setColour(juce::Colour(0xff16130e));
+    g.fillRoundedRectangle(track, 3.0f);
+    g.setColour(juce::Colour(0xff5b574b).withAlpha(0.40f));
+    g.drawRoundedRectangle(track.reduced(0.5f), 3.0f, 0.7f);
+
+    if (thumbSize <= 0) return;
+
+    // Thumb — warm amber/gold, brightens on hover/press
+    const float thumbAlpha = isMouseDown ? 0.95f : (isMouseOver ? 0.78f : 0.55f);
+    juce::Rectangle<float> thumb;
+    if (isScrollbarVertical)
+        thumb = { (float)x + 2.0f, (float)(y + thumbStartPosition) + 1.5f,
+                  (float)width - 4.0f, (float)thumbSize - 3.0f };
+    else
+        thumb = { (float)(x + thumbStartPosition) + 1.5f, (float)y + 2.0f,
+                  (float)thumbSize - 3.0f, (float)height - 4.0f };
+
+    g.setGradientFill(juce::ColourGradient(
+        juce::Colour(0xffc89040).withAlpha(thumbAlpha), thumb.getX(), thumb.getY(),
+        juce::Colour(0xff7a5a28).withAlpha(thumbAlpha), thumb.getX(), thumb.getBottom(), false));
+    g.fillRoundedRectangle(thumb, 2.5f);
+    g.setColour(juce::Colour(0x38ffffff));
+    g.drawRoundedRectangle(thumb.reduced(0.5f), 2.5f, 0.7f);
 }

@@ -25,6 +25,11 @@ public:
                         bool shouldDrawButtonAsHighlighted,
                         bool shouldDrawButtonAsDown) override;
 
+    void drawScrollbar(juce::Graphics& g, juce::ScrollBar& scrollbar,
+                       int x, int y, int width, int height,
+                       bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
+                       bool isMouseOver, bool isMouseDown) override;
+
     juce::Font getComboBoxFont(juce::ComboBox& box) override;
     void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override;
     void drawLabel(juce::Graphics& g, juce::Label& label) override;

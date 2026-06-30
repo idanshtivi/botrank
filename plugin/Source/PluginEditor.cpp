@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "PresetBrowser.h"
 
 namespace {
 namespace Theme {
@@ -194,12 +195,20 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
 
     // CONTROLLERS — buttons[0..2], sliders[0..2], combos[0]
     addToggle("Glide",     "glideEnabled");      // buttons[0]
-    addKnob("Glide Time",  "glideTime");         // sliders[0]
+    auto& glideTimeKnob = addKnob("Glide Time",  "glideTime");   // sliders[0]
+    glideTimeKnob.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    glideTimeKnob.setPopupDisplayEnabled(true, true, this);
     addToggle("Legato",    "legato");            // buttons[1]
     addToggle("Retrigger", "retrigger");         // buttons[2]
     addCombo("Priority", "notePriority", {"Low", "Last", "High"}); // combos[0]
-    addKnob("Bend Range",  "pitchBendRange");    // sliders[1]
-    addKnob("Fine Tune",   "fineTune");          // sliders[2]
+    // Bend Range + Fine Tune live in the header GLOBAL strip — value shown as a floating
+    // popup bubble on interaction instead of a permanently visible value box.
+    auto& bendRangeKnob = addKnob("Bend Range",  "pitchBendRange");    // sliders[1]
+    bendRangeKnob.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    bendRangeKnob.setPopupDisplayEnabled(true, true, this);
+    auto& fineTuneKnob = addKnob("Fine Tune",   "fineTune");           // sliders[2]
+    fineTuneKnob.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    fineTuneKnob.setPopupDisplayEnabled(true, true, this);
 
     playModeCombo = std::make_unique<juce::ComboBox>();
     playModeCombo->addItem("MONO", 1);
@@ -270,7 +279,7 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     if (auto it = attachedLabels.find(&outputDriveKnob); it != attachedLabels.end() && it->second != nullptr)
         it->second->setVisible(false);
 
-    // Preset strip (UI shell only — no real preset storage)
+    // Preset strip
     auto stylePresetBtn = [](juce::TextButton& btn, const juce::String& text) {
         btn.setButtonText(text);
         btn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xffd8d5c7));
@@ -280,23 +289,76 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     };
     stylePresetBtn(presetPrevButton, "<");
     stylePresetBtn(presetNextButton, ">");
+    presetPrevButton.onClick = [this] { navigatePreset(-1); };
+    presetNextButton.onClick = [this] { navigatePreset(+1); };
     addAndMakeVisible(presetPrevButton);
     addAndMakeVisible(presetNextButton);
 
-    presetNameLabel.setText("Init", juce::dontSendNotification);
+    presetNameLabel.setText(processor.presetManager.getCurrentPresetName(), juce::dontSendNotification);
     presetNameLabel.setJustificationType(juce::Justification::centred);
     presetNameLabel.setColour(juce::Label::textColourId, Theme::textPrimary);
     presetNameLabel.setColour(juce::Label::backgroundColourId, juce::Colour(0xffd4d2c7));
     presetNameLabel.setColour(juce::Label::outlineColourId, Theme::sectionSoftBorder.withAlpha(0.55f));
     presetNameLabel.setFont(Theme::uiFont(12.5f, juce::Font::bold));
+    presetNameLabel.setMouseCursor(juce::MouseCursor::PointingHandCursor);
     addAndMakeVisible(presetNameLabel);
+    presetNameLabel.addMouseListener(this, false);
 
     setSize(1460, 780);
 }
 
 LadderVoiceAudioProcessorEditor::~LadderVoiceAudioProcessorEditor()
 {
+    presetNameLabel.removeMouseListener(this);
     setLookAndFeel(nullptr);
+}
+
+void LadderVoiceAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.eventComponent == &presetNameLabel)
+        showPresetBrowser();
+}
+
+void LadderVoiceAudioProcessorEditor::updatePresetNameDisplay(const juce::String& name)
+{
+    presetNameLabel.setText(name, juce::dontSendNotification);
+}
+
+void LadderVoiceAudioProcessorEditor::navigatePreset(int delta)
+{
+    auto& mgr = processor.presetManager;
+    mgr.refreshUserPresets();
+    const int total = mgr.getTotalPresetCount();
+    if (total == 0) return;
+
+    // Find current index by name match, fall back to stored index
+    int idx = currentPresetIndex;
+    for (int i = 0; i < total; ++i) {
+        if (mgr.getPresetNameAtIndex(i).equalsIgnoreCase(mgr.getCurrentPresetName())) {
+            idx = i;
+            break;
+        }
+    }
+
+    idx = (idx + delta + total) % total;
+    currentPresetIndex = idx;
+    mgr.loadPresetAtIndex(idx, processor.parameters);
+    updatePresetNameDisplay(mgr.getCurrentPresetName());
+}
+
+void LadderVoiceAudioProcessorEditor::showPresetBrowser()
+{
+    processor.presetManager.refreshUserPresets();
+
+    auto* browser = new PresetBrowser(processor, [this](const juce::String& name) {
+        updatePresetNameDisplay(name);
+    });
+    // Apply the synth LookAndFeel so buttons, scrollbar, etc. match the instrument palette
+    browser->setLookAndFeel(&analogLookAndFeel);
+
+    juce::CallOutBox::launchAsynchronously(std::unique_ptr<juce::Component>(browser),
+                                           presetNameLabel.getScreenBounds(),
+                                           nullptr);
 }
 
 bool LadderVoiceAudioProcessorEditor::hasParameter(const juce::String& parameterId) const
@@ -625,26 +687,32 @@ void LadderVoiceAudioProcessorEditor::resized()
 {
     int s = 0, b = 0, c = 0;
 
-    // CONTROLLERS — section {110,104,160,486}
-    setComponentBounds(buttons, b, {130, 144, 122, 28});       // [b0] glideEnabled
-    if (playModeCombo != nullptr) playModeCombo->setBounds({126, 190, 124, 26});
-    setComponentBounds(sliders, s, {138, 234, 98, 76});        // [s0] glideTime      → render 66px
-    setComponentBounds(buttons, b, {130, 318, 122, 26});       // [b1] legato
-    setComponentBounds(buttons, b, {130, 350, 122, 26});       // [b2] retrigger
-    setComponentBounds(combos, c, {126, 394, 124, 24});        // [c0] notePriority
-    setComponentBounds(sliders, s, {138, 436, 98, 76});        // [s1] pitchBendRange → render 66px
-    setComponentBounds(sliders, s, {138, 532, 98, 62});        // [s2] fineTune
+    // CONTROLLERS — section {110,104,160,500}
+    // MODE / Priority / Glide Time at top, then the 4 push buttons below in reading order (Glide first)
+    if (playModeCombo != nullptr) playModeCombo->setBounds({126, 156, 124, 26}); // label at 139
+    setComponentBounds(combos,  c, {126, 200, 124, 24});       // [c0] notePriority  label at 184
+    setComponentBounds(sliders, s, {141, 242, 98, 40});        // [s0] glideTime (popup) label at 225
+    // [s1] pitchBendRange + [s2] fineTune in header strip
+    setComponentBounds(sliders, s, {1090, 38, 88, 50});        // [s1] pitchBendRange
+    setComponentBounds(sliders, s, {1200, 38, 88, 50});        // [s2] fineTune
+
+    // 4 push buttons — vertical column, knob sits tight above first button
+    setComponentBounds(buttons, b, {130, 286, 120, 73});       // [b0] glide
+    setComponentBounds(buttons, b, {130, 363, 120, 73});       // [b1] legato
+    setComponentBounds(buttons, b, {130, 440, 120, 73});       // [b2] retrigger
+    // [b6] keyboard set after OSC loop (counter must reach 6 first)
     // OSC BANK — columns: Enable@298 Wave@398 Range@500 PW/Detune@574 Level@680
     // Knob slots w=102 h=124 → knobBox 98×102 → render 98px, medium strip (98≥76)
     for (int osc = 0; osc < 3; ++osc) {
         const int rowY = 154 + osc * 144;
-        setComponentBounds(buttons, b, {300, rowY,      88, 26});            // [b3,4,5] oscEnabled
-        setComponentBounds(combos,  c, {398, rowY + 2,  96, 26});            // [c1,3,5] wave
-        setComponentBounds(combos,  c, {500, rowY + 2,  74, 26});            // [c2,4,6] range
+        const int btnY = (osc == 0) ? 143 : rowY - 10;
+        setComponentBounds(buttons, b, {329, btnY, 50, 124});               // [b3,4,5] osc xlarge
+        setComponentBounds(combos,  c, {398, rowY + 8, 96, 26});            // [c1,3,5] wave
+        setComponentBounds(combos,  c, {500, rowY + 8, 74, 26});            // [c2,4,6] range
         if (osc > 0) setComponentBounds(sliders, s, {578, rowY + 8, 92, 100}); // [s4,6] detune
-        if (osc == 2) setComponentBounds(buttons, b, {300, rowY + 54, 88, 26}); // [b6] keyboard
         setComponentBounds(sliders, s, {674, rowY + 8, 92, 100});           // [s3,5,7] level
     }
+    setComponentBounds(buttons, b, {130, 517, 120, 73});       // [b6] keyboard
     setComponentBounds(sliders, s, {578, 162, 92, 100});      // [s8] osc1PulseWidth
     setComponentBounds(sliders, s, {0, 0, 0, 0});              // [s9] analogDrift hidden, APVTS kept
 

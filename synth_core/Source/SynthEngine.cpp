@@ -69,6 +69,7 @@ void SynthEngine::prepare(double sampleRate, int blockSize)
 {
     (void)blockSize;
     setSampleRate(sampleRate);
+    _polyHeadroomSmoothed = 1.0f;
 }
 
 void SynthEngine::setSampleRate(double sampleRate)
@@ -88,6 +89,7 @@ void SynthEngine::_propagateSampleRate()
     _output.setSampleRate(_sampleRate);
 
     for (auto& s : _smoothers) s.setSampleRate(_sampleRate);
+    _polyHeadroomCoeff = static_cast<float>(std::exp(-1.0 / (0.005 * _sampleRate)));
 }
 
 void SynthEngine::setParameter(ParamId id, float value)
@@ -313,17 +315,29 @@ static void advanceRng(uint32_t& s)
 void SynthEngine::noteOn(int midiNote, float velocity)
 {
     if (_playMode == 0) {
-        // Legato: if voice was already active and legato param is on, preserve phase.
-        // Fresh starts and retriggers get randomized phases for analog character.
-        const bool isLegato = _synthVoice.isActive() &&
-                              (_params[static_cast<int>(ParamId::Legato)] >= 0.5f);
+        const bool wasActive  = _synthVoice.isActive();
+        const bool legatoMode = _params[static_cast<int>(ParamId::Legato)]   >= 0.5f;
+        const bool retrigMode = _params[static_cast<int>(ParamId::Retrigger)] >= 0.5f;
+        // Legato suppresses envelope retrigger only when Retrigger is also off.
+        const bool isLegato   = wasActive && legatoMode && !retrigMode;
+
         _voiceCtrl.noteOn(midiNote, velocity);
-        _synthVoice.noteOn(midiNote, velocity);
-        if (!isLegato) {
+        // In legato mode (no retrigger), keep envelopes running continuously.
+        // Only call noteOn (which fires gateOn) when we actually want a retrigger.
+        if (!isLegato)
+            _synthVoice.noteOn(midiNote, velocity);
+
+        // Only randomize phases when the voice was truly silent.
+        // Jumping phase while the envelope is non-zero creates an audible click;
+        // real analog oscillators run continuously and never reset on retrigger.
+        if (!isLegato && !wasActive) {
             advanceRng(_noteStartRng);
             const uint32_t seed = _noteStartRng
                 ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
             _synthVoice.oscillators.randomizePhases(seed);
+            _synthVoice.resetAudioChainState();
+        } else if (!isLegato) {
+            advanceRng(_noteStartRng); // keep RNG sequence consistent
         }
         return;
     }
@@ -333,12 +347,16 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     _polyHeld[static_cast<size_t>(voiceIndex)] = true;
     _polyAges[static_cast<size_t>(voiceIndex)] = ++_voiceAgeCounter;
 
-    // Each new poly note gets independent random starting phases for all 3 oscillators.
+    // Only randomize phases when the poly voice was silent — same click-prevention
+    // logic as mono: jumping phase mid-release causes a discontinuity in the output.
     advanceRng(_noteStartRng);
-    const uint32_t seed = _noteStartRng
-        ^ (static_cast<uint32_t>(voiceIndex + 1) * 2654435761u)
-        ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
-    _polyVoices[static_cast<size_t>(voiceIndex)].oscillators.randomizePhases(seed);
+    if (!_polyVoices[static_cast<size_t>(voiceIndex)].isActive()) {
+        const uint32_t seed = _noteStartRng
+            ^ (static_cast<uint32_t>(voiceIndex + 1) * 2654435761u)
+            ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
+        _polyVoices[static_cast<size_t>(voiceIndex)].oscillators.randomizePhases(seed);
+        _polyVoices[static_cast<size_t>(voiceIndex)].resetAudioChainState();
+    }
 
     _polyVoices[static_cast<size_t>(voiceIndex)].noteOn(midiNote, velocity);
 }
@@ -548,10 +566,15 @@ float SynthEngine::processSample()
                 ++activeCount;
             }
         }
-        // Dynamic poly headroom: prevents post-sum intermodulation from exploding.
-        const int n = std::max(1, activeCount);
-        const float polyHeadroom = 1.0f / (1.0f + 0.25f * static_cast<float>(n - 1));
-        voiceSample *= polyHeadroom;
+        if (activeCount == 0) {
+            _polyHeadroomSmoothed = 1.0f; // reset for next chord — voiceSample is 0 here
+        } else {
+            const float polyHeadroomTarget =
+                1.0f / (1.0f + 0.25f * static_cast<float>(activeCount - 1));
+            _polyHeadroomSmoothed = _polyHeadroomCoeff * _polyHeadroomSmoothed
+                                  + (1.0f - _polyHeadroomCoeff) * polyHeadroomTarget;
+            voiceSample *= _polyHeadroomSmoothed;
+        }
     }
 
     double out = _output.processSample(voiceSample);
@@ -589,7 +612,8 @@ void SynthEngine::reset()
     _lfo.reset();
     _modWheelPosition = 0.0;
     _output.reset();
-    _railSag = 0.0f;
+    _railSag              = 0.0f;
+    _polyHeadroomSmoothed = 1.0f;
     for (auto& s : _smoothers) {
         s = ParamSmoother{};
         s.setSampleRate(_sampleRate);

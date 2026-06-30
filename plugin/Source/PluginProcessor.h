@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "../../synth_core/Include/SynthEngine.h"
+#include "PresetManager.h"
 
 class LadderVoiceAudioProcessor final : public juce::AudioProcessor {
 public:
@@ -35,6 +36,7 @@ public:
     void applyInitPatchToAPVTS();
 
     juce::AudioProcessorValueTreeState parameters;
+    PresetManager presetManager;
 
 private:
     SynthCore::SynthEngine synth;

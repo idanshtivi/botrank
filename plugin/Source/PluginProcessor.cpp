@@ -112,9 +112,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout LadderVoiceAudioProcessor::c
     juce::NormalisableRange<float> unitRange(0.0f, 1.0f, 0.01f);
     juce::NormalisableRange<float> levelRange(0.0f, 1.0f, 0.001f);
     juce::NormalisableRange<float> driveRange(0.0f, 3.0f, 0.01f);
-    juce::NormalisableRange<float> attackRange(0.001f, 10.0f);
-    attackRange.setSkewForCentre(0.05f);
-    attackRange.interval = 0.001f;
+    // True logarithmic mapping for attack: value = start * (end/start)^normalised.
+    // The old skewed range (setSkewForCentre(0.05f), skew≈0.13) used exponent 7.67 on the
+    // normalised value. At min (normalised=0) even a 20px drag gives a normalised delta
+    // that pow(n, 7.67) maps to < float32 epsilon — the stored value is bit-identical to
+    // 0.001 every tick, so currentNorm resets to 0.0 and the knob never escapes 1ms.
+    // With log mapping, normalised delta of 0.000111 (1-pixel slow drag) immediately
+    // produces value ≈ 0.001001 — 8000× above float epsilon — so the knob moves instantly.
+    auto attackRange = juce::NormalisableRange<float>(
+        0.001f, 10.0f,
+        [](float s, float e, float n) { return s * std::pow(e / s, n); },
+        [](float s, float e, float v) { return std::log(v / s) / std::log(e / s); });
     juce::NormalisableRange<float> decayRange(0.005f, 10.0f);
     decayRange.setSkewForCentre(0.35f);
     decayRange.interval = 0.001f;
@@ -282,7 +290,22 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     buffer.clear();
     pushParametersToSynth();
 
+    const auto numSamples = buffer.getNumSamples();
+    const auto numChannels = buffer.getNumChannels();
+    int currentSample = 0;
+
+    auto renderUntil = [&](int endSample) {
+        endSample = juce::jlimit(0, numSamples, endSample);
+        for (; currentSample < endSample; ++currentSample) {
+            const auto out = synth.processSample();
+            for (int channel = 0; channel < numChannels; ++channel)
+                buffer.setSample(channel, currentSample, out);
+        }
+    };
+
     for (const auto metadata : midiMessages) {
+        renderUntil(metadata.samplePosition);
+
         const auto message = metadata.getMessage();
         if (message.isNoteOn()) {
             synth.noteOn(message.getNoteNumber(), message.getVelocity() * 127.0f);
@@ -296,14 +319,7 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         }
     }
 
-    const auto numSamples = buffer.getNumSamples();
-    const auto numChannels = buffer.getNumChannels();
-    for (int sample = 0; sample < numSamples; ++sample) {
-        const auto out = synth.processSample();
-        for (int channel = 0; channel < numChannels; ++channel) {
-            buffer.setSample(channel, sample, out);
-        }
-    }
+    renderUntil(numSamples);
 }
 
 juce::AudioProcessorEditor* LadderVoiceAudioProcessor::createEditor()
@@ -327,15 +343,19 @@ void LadderVoiceAudioProcessor::applyInitPatchToAPVTS()
 
 void LadderVoiceAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    if (auto xml = parameters.copyState().createXml()) {
+    auto state = parameters.copyState();
+    state.setProperty("presetName", presetManager.getCurrentPresetName(), nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
-    }
 }
 
 void LadderVoiceAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary(data, sizeInBytes)) {
-        parameters.replaceState(juce::ValueTree::fromXml(*xml));
+        auto tree = juce::ValueTree::fromXml(*xml);
+        auto name = tree.getProperty("presetName", "Init").toString();
+        presetManager.setCurrentPresetName(name);
+        parameters.replaceState(tree);
         // Force analogDrift to 0 — there is no visible UI control for it.
         // Old saved state may contain a non-zero value from a prior build.
         if (auto* p = parameters.getParameter("analogDrift"))

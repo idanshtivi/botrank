@@ -12,6 +12,9 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;
+
+    void updatePresetNameDisplay(const juce::String& name);
 
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -35,6 +38,12 @@ private:
     std::unique_ptr<juce::ComboBox> playModeCombo;
     std::unique_ptr<juce::Label> playModeLabel;
     std::unique_ptr<ComboBoxAttachment> playModeAttachment;
+
+    // Preset navigation — tracks index across factory + user combined list
+    int currentPresetIndex = 0;
+
+    void navigatePreset(int delta);
+    void showPresetBrowser();
 
     juce::Slider& addKnob(const juce::String& text, const juce::String& parameterId);
     juce::ToggleButton& addToggle(const juce::String& text, const juce::String& parameterId);

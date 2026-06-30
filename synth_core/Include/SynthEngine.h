@@ -209,6 +209,12 @@ private:
     // Power-supply sag state (populated in Milestone 7)
     float _railSag = 0.0f;
 
+    // Poly headroom smoother: prevents the instant gain step that occurs when
+    // activeCount changes (1→2→3→4 voices), which would otherwise produce an
+    // audible click on every added note when existing voices are still sounding.
+    float _polyHeadroomSmoothed = 1.0f;
+    float _polyHeadroomCoeff    = 0.0f; // computed in _propagateSampleRate()
+
 };
 
 } // namespace SynthCore

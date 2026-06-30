@@ -14,7 +14,9 @@ target_sources(LadderVoice
     PRIVATE
         Source/AnalogLookAndFeel.cpp
         Source/PluginEditor.cpp
-        Source/PluginProcessor.cpp)
+        Source/PluginProcessor.cpp
+        Source/PresetManager.cpp
+        Source/PresetBrowser.cpp)
 
 juce_add_binary_data(LadderVoiceAssets
     SOURCES

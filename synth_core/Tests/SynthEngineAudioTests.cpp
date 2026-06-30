@@ -4,6 +4,7 @@
 #include "../Include/LadderFilter.h"
 #include "../Include/OutputStage.h"
 #include "../Include/DSPUtils.h"
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -1792,6 +1793,263 @@ TEST(AnalogDriftTest, SetNonZeroThenClearRestoresZero)
     EXPECT_FLOAT_EQ(engine.getParameter(ParamId::AnalogDrift), 0.0f);
 }
 
+// ── Part 21 — Pitch de-click: mono/poly note transition no-click ──────────────
+
+// Shared patch setup: mono, single saw, full sustain, all drive off, filter open.
+static void setupDeclickPatch(SynthEngine& e)
+{
+    e.prepare(44100.0, 512);
+    e.setParameter(ParamId::PlayMode,        0.0f);
+    e.setParameter(ParamId::Osc1Level,       1.0f);
+    e.setParameter(ParamId::Osc2Enabled,     0.0f);
+    e.setParameter(ParamId::Osc3Enabled,     0.0f);
+    e.setParameter(ParamId::Osc1Waveform,    2.0f); // saw
+    e.setParameter(ParamId::AmpAttack,       0.001f);
+    e.setParameter(ParamId::AmpDecay,        0.1f);
+    e.setParameter(ParamId::AmpSustain,      1.0f);
+    e.setParameter(ParamId::MixerDrive,      0.0f);
+    e.setParameter(ParamId::FilterDrive,     0.0f);
+    e.setParameter(ParamId::FilterCutoff,    20000.0f);
+    e.setParameter(ParamId::FilterResonance, 0.0f);
+    e.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    e.setParameter(ParamId::LfoAmount,       0.0f);
+    e.setParameter(ParamId::ModWheelAmount,  0.0f);
+}
+
+// Case A — mono note transition, Last priority.
+// Verify pitch changes to the new note and audio stays finite and bounded.
+// Note: PolyBLEP click magnitude (~1% of peak) is smaller than the corrected
+// saw-wrap discontinuity (~peak), so click absence cannot be verified via
+// max-delta; correctness is confirmed by pitch-change and stability checks.
+TEST(PitchDeclickTest, MonoTransitionPitchChanges_LastPriority)
+{
+    SynthEngine engine;
+    setupDeclickPatch(engine);
+    engine.setParameter(ParamId::NotePriority, 1.0f); // Last
+
+    engine.noteOn(48, 100.0f); // C3
+    renderMono(engine, 8192);  // reach sustain
+
+    const double hzC3 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    engine.noteOn(52, 100.0f); // E3 — must change active pitch
+    const auto transWindow = renderMono(engine, 512);
+    renderMono(engine, 8192); // settle
+    const double hzE3 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    const auto ts = statsFor(transWindow);
+    EXPECT_TRUE(ts.finite)       << "NaN/Inf during mono Last-priority transition";
+    EXPECT_LE(ts.peak, 1.0f)    << "Signal exceeded bounds during transition";
+    EXPECT_NEAR(hzC3, 130.81, 5.0) << "C3 must play before transition";
+    EXPECT_NEAR(hzE3, 164.81, 5.0) << "E3 must be active after Last-priority transition";
+}
+
+// Case A — mono note transition, High priority.
+TEST(PitchDeclickTest, MonoTransitionPitchChanges_HighPriority)
+{
+    SynthEngine engine;
+    setupDeclickPatch(engine);
+    engine.setParameter(ParamId::NotePriority, 2.0f); // High
+
+    engine.noteOn(48, 100.0f); // C3 held
+    renderMono(engine, 8192);
+
+    const double hzC3 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    engine.noteOn(64, 100.0f); // E4 — higher note wins with High priority
+    const auto transWindow = renderMono(engine, 512);
+    renderMono(engine, 8192);
+    const double hzE4 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    const auto ts = statsFor(transWindow);
+    EXPECT_TRUE(ts.finite)      << "NaN/Inf during mono High-priority transition";
+    EXPECT_LE(ts.peak, 1.0f)   << "Signal exceeded bounds during transition";
+    EXPECT_NEAR(hzC3, 130.81, 5.0) << "C3 must play before transition";
+    EXPECT_NEAR(hzE4, 329.63, 8.0) << "E4 must be active after High-priority transition";
+}
+
+// Case A — mono note transition, Low priority.
+// Click happens on noteOff of the lower note when the higher note takes over.
+TEST(PitchDeclickTest, MonoTransitionPitchChanges_LowPriority)
+{
+    SynthEngine engine;
+    setupDeclickPatch(engine);
+    engine.setParameter(ParamId::NotePriority, 0.0f); // Low
+
+    engine.noteOn(64, 100.0f); // E4 held first
+    renderMono(engine, 8192);
+
+    engine.noteOn(48, 100.0f); // C3 — lower, takes over with Low priority
+    renderMono(engine, 2048);
+
+    const double hzC3 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    // Release C3: E4 becomes active — pitch changes while VCA is still open
+    engine.noteOff(48);
+    const auto transWindow = renderMono(engine, 512);
+    renderMono(engine, 8192);
+    const double hzE4 = measureHz(renderMono(engine, 44100), 44100.0);
+
+    const auto ts = statsFor(transWindow);
+    EXPECT_TRUE(ts.finite)      << "NaN/Inf during mono Low-priority transition";
+    EXPECT_LE(ts.peak, 1.0f)   << "Signal exceeded bounds during transition";
+    EXPECT_NEAR(hzC3, 130.81, 5.0) << "C3 must play while both held";
+    EXPECT_NEAR(hzE4, 329.63, 8.0) << "E4 must be active after C3 released";
+}
+
+// Case B — Legato ON, Retrigger OFF: new note must NOT restart the envelope.
+TEST(PitchDeclickTest, LegatoNoEnvelopeRetriggerWhenRetriggerOff)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,        0.0f);
+    engine.setParameter(ParamId::Legato,          1.0f);
+    engine.setParameter(ParamId::Retrigger,       0.0f);
+    engine.setParameter(ParamId::Osc1Level,       1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+    engine.setParameter(ParamId::AmpAttack,       0.5f); // slow attack makes retrigger obvious
+    engine.setParameter(ParamId::AmpDecay,        0.1f);
+    engine.setParameter(ParamId::AmpSustain,      1.0f);
+    engine.setParameter(ParamId::MixerDrive,      0.0f);
+    engine.setParameter(ParamId::FilterDrive,     0.0f);
+    engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::LfoAmount,       0.0f);
+    engine.setParameter(ParamId::ModWheelAmount,  0.0f);
+
+    engine.noteOn(60, 100.0f); // C4
+    renderMono(engine, 44100); // reach full sustain (0.5s attack, now 1.0s in)
+
+    const double rmsBefore = rms(renderMono(engine, 512));
+
+    engine.noteOn(64, 100.0f); // E4 — legato, envelope must NOT restart
+    renderMono(engine, 512);   // brief buffer after legato noteOn
+    const double rmsAfter = rms(renderMono(engine, 512));
+
+    // If the envelope had retriggered with 0.5s attack, amplitude would drop sharply.
+    // Without retrigger, amplitude stays near sustain level (rmsBefore ≈ rmsAfter).
+    EXPECT_GT(rmsAfter, rmsBefore * 0.7)
+        << "Legato+Retrigger=OFF noteOn must not restart the loudness envelope "
+           "(rmsBefore=" << rmsBefore << " rmsAfter=" << rmsAfter << ")";
+}
+
+// Case C — Poly 4 voice stealing: audio must remain stable when voices are stolen.
+TEST(PitchDeclickTest, PolyVoiceStealAudioStable)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,        1.0f); // poly 4
+    engine.setParameter(ParamId::Osc1Level,       1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc1Waveform,    2.0f);
+    engine.setParameter(ParamId::AmpAttack,       0.001f);
+    engine.setParameter(ParamId::AmpSustain,      1.0f);
+    engine.setParameter(ParamId::MixerDrive,      0.0f);
+    engine.setParameter(ParamId::FilterDrive,     0.0f);
+    engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::LfoAmount,       0.0f);
+    engine.setParameter(ParamId::ModWheelAmount,  0.0f);
+
+    engine.noteOn(48, 100.0f); // fill all 4 voices
+    engine.noteOn(52, 100.0f);
+    engine.noteOn(55, 100.0f);
+    engine.noteOn(60, 100.0f);
+    renderMono(engine, 8192); // reach sustain on all voices
+
+    engine.noteOn(64, 100.0f); // 5th note forces voice stealing
+    const auto transWindow = renderMono(engine, 512);
+    renderMono(engine, 4096);
+    const auto settledWindow = renderMono(engine, 4096);
+
+    const auto ts = statsFor(transWindow);
+    const auto ss = statsFor(settledWindow);
+    EXPECT_TRUE(ts.finite)  << "NaN/Inf during poly voice stealing";
+    EXPECT_LE(ts.peak, 1.0) << "Signal exceeded bounds during voice stealing";
+    EXPECT_TRUE(ss.finite)  << "NaN/Inf after poly voice stealing settled";
+    EXPECT_GT(ss.rms, 0.01) << "Signal must remain audible after voice stealing";
+}
+
+// Case D — Fresh single note must start at the correct pitch immediately.
+// The de-click smoother must snap on fresh starts — no audible pitch ramp from zero.
+TEST(PitchDeclickTest, FreshNoteIsImmediate_NoPitchRamp)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,        0.0f);
+    engine.setParameter(ParamId::Osc1Level,       1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc1Waveform,    2.0f);
+    engine.setParameter(ParamId::AmpAttack,       0.001f);
+    engine.setParameter(ParamId::AmpSustain,      1.0f);
+    engine.setParameter(ParamId::MixerDrive,      0.0f);
+    engine.setParameter(ParamId::FilterDrive,     0.0f);
+    engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::LfoAmount,       0.0f);
+    engine.setParameter(ParamId::ModWheelAmount,  0.0f);
+
+    engine.noteOn(69, 100.0f); // A4 = 440 Hz
+    // 2ms window: with 1ms attack the note must already be producing audio.
+    const auto first2ms = renderMono(engine, 88);
+    EXPECT_GT(rms(first2ms), 0.001)
+        << "Fresh note must produce audio within 2ms — de-click smoother must not add latency";
+
+    // Settle and verify pitch is correct at A4, not ramping from some stale frequency.
+    const auto settled = renderMono(engine, 44100);
+    const double measuredHz = measureHz(settled, 44100.0);
+    EXPECT_NEAR(measuredHz, 440.0, 5.0)
+        << "Fresh note pitch must be A4=440Hz from start — smoother must snap on fresh note";
+}
+
+// Case D — Glide regression: user glide must still produce a slow pitch transition.
+// Uses Last priority so the second note (C5) overrides C4 in the note stack.
+TEST(PitchDeclickTest, GlideStillWorksAfterDeclick)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,        0.0f);
+    engine.setParameter(ParamId::NotePriority,    1.0f); // Last — C5 overrides C4
+    engine.setParameter(ParamId::GlideEnabled,    1.0f);
+    engine.setParameter(ParamId::GlideTime,       0.1f); // 100ms glide
+    engine.setParameter(ParamId::Osc1Level,       1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+    engine.setParameter(ParamId::AmpAttack,       0.001f);
+    engine.setParameter(ParamId::AmpSustain,      1.0f);
+    engine.setParameter(ParamId::MixerDrive,      0.0f);
+    engine.setParameter(ParamId::FilterDrive,     0.0f);
+    engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::LfoAmount,       0.0f);
+    engine.setParameter(ParamId::ModWheelAmount,  0.0f);
+
+    engine.noteOn(60, 100.0f); // C4 = 261.63 Hz
+    renderMono(engine, 4096);  // reach sustain
+
+    engine.noteOn(72, 100.0f); // C5 = 523.25 Hz — glide begins from C4
+
+    // At 30ms into glide (30% progress through 100ms glide), pitch should still
+    // be well below C5: 261.63 + 30% * 261.62 ≈ 340 Hz, well under 418 Hz (80% of C5).
+    const auto at30ms = renderMono(engine, static_cast<int>(44100 * 0.03));
+    const double hzAt30ms = measureHz(at30ms, 44100.0);
+
+    // After 500ms total (glide done at 100ms), pitch must be at C5.
+    renderMono(engine, static_cast<int>(44100 * 0.47));
+    const auto settled = renderMono(engine, 44100);
+    const double hzSettled = measureHz(settled, 44100.0);
+
+    EXPECT_LT(hzAt30ms, 523.25 * 0.80)
+        << "Glide must still be sliding at 30ms of a 100ms glide "
+           "(hzAt30ms=" << hzAt30ms << ", threshold=" << 523.25 * 0.80 << ")";
+
+    EXPECT_NEAR(hzSettled, 523.25, 15.0)
+        << "After glide completes, pitch must be at C5 (hzSettled=" << hzSettled << ")";
+}
+
 // Simulate "old saved state had AnalogDrift=1.0, then host forces it to 0":
 // engine must treat AnalogDrift=0 as truly zero — Osc1 and Osc2 must then match.
 TEST(AnalogDriftTest, ForcedZeroAfterNonZeroMakesOscillatorsMatch)
@@ -1836,4 +2094,154 @@ TEST(AnalogDriftTest, ForcedZeroAfterNonZeroMakesOscillatorsMatch)
     EXPECT_NEAR(f1, f2, 0.1)
         << "At AnalogDrift=0: Osc1=" << f1 << " Hz, Osc2=" << f2
         << " Hz — they must match within 0.1 Hz (hidden drift must be off)";
+}
+
+// ── Part 22 — Poly headroom smoothing: no instant gain step on voice addition ──
+
+// Shared patch for headroom tests: poly 4, single saw, full sustain, drives off.
+static void setupHeadroomPatch(SynthEngine& e)
+{
+    e.prepare(44100.0, 512);
+    e.setParameter(ParamId::PlayMode,        1.0f); // poly 4
+    e.setParameter(ParamId::Osc1Level,       1.0f);
+    e.setParameter(ParamId::Osc1Waveform,    2.0f); // saw
+    e.setParameter(ParamId::Osc2Enabled,     0.0f);
+    e.setParameter(ParamId::Osc3Enabled,     0.0f);
+    e.setParameter(ParamId::AmpAttack,       0.001f);
+    e.setParameter(ParamId::AmpDecay,        1.0f);
+    e.setParameter(ParamId::AmpSustain,      1.0f);
+    e.setParameter(ParamId::MixerDrive,      0.0f);
+    e.setParameter(ParamId::FilterDrive,     0.0f);
+    e.setParameter(ParamId::FilterCutoff,    20000.0f);
+    e.setParameter(ParamId::FilterResonance, 0.0f);
+    e.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    e.setParameter(ParamId::LfoAmount,       0.0f);
+    e.setParameter(ParamId::ModWheelAmount,  0.0f);
+}
+
+// When the second poly note is added, the headroom target drops from 1.0 to 0.8.
+// With instant application this causes a 20% amplitude step on voice 1.
+// With 5 ms smoothing the step is inaudible: RMS in the first 1 ms after the
+// second noteOn must be ≥ 88 % of the RMS measured just before it.
+// The second voice uses a 10 s attack so its own output is negligible over 1 ms,
+// leaving the headroom change as the only variable between the two windows.
+TEST(SynthEngineAudioTest, PolyHeadroomDoesNotStepOnSecondNote)
+{
+    SynthEngine engine;
+    SynthEngine reference;
+    setupHeadroomPatch(engine);
+    setupHeadroomPatch(reference);
+
+    engine.noteOn(48, 100.0f);          // voice 1 — C3
+    renderMono(engine, 8192);           // well past attack; headroom settled at 1.0
+
+    // Raise attack to 10 s so voice 2 contributes nothing in the 1 ms window.
+    engine.setParameter(ParamId::AmpAttack, 10.0f);
+
+    reference.noteOn(48, 100.0f);
+    renderMono(reference, 8192);
+    reference.setParameter(ParamId::AmpAttack, 10.0f);
+    const double rmsReference = rms(renderMono(reference, 44)); // ~1 ms of voice 1 alone
+
+    engine.noteOn(60, 100.0f);          // voice 2 — C4; headroom target 1.0 → 0.8
+    const double rmsAfter = rms(renderMono(engine, 44)); // ~1 ms immediately after
+
+    // Without smoothing: rmsAfter ≈ 0.80 × rmsBefore (instant 20 % cut)
+    // With 5 ms smoothing: rmsAfter ≈ rmsBefore (headroom barely moved)
+    EXPECT_GT(rmsAfter, rmsReference * 0.92)
+        << "Poly headroom must not drop voice 1 when 2nd note added "
+           "(rmsReference=" << rmsReference << " rmsAfter=" << rmsAfter << ")";
+}
+
+// Same check for the third note: headroom target 0.8 → 0.667 (16.7 % drop).
+// After voice 2 has settled to sustain the two-voice steady-state RMS is the
+// baseline; the third voice again uses a 10 s attack.
+TEST(SynthEngineAudioTest, PolyHeadroomDoesNotStepOnThirdNote)
+{
+    SynthEngine engine;
+    SynthEngine reference;
+    setupHeadroomPatch(engine);
+    setupHeadroomPatch(reference);
+
+    engine.noteOn(48, 100.0f);          // voice 1 — C3
+    renderMono(engine, 8192);
+
+    engine.noteOn(52, 100.0f);          // voice 2 — E3
+    renderMono(engine, 8192);           // headroom settled at 0.8; voice 2 at full sustain
+
+    engine.setParameter(ParamId::AmpAttack, 10.0f);
+
+    reference.noteOn(48, 100.0f);
+    renderMono(reference, 8192);
+    reference.noteOn(52, 100.0f);
+    renderMono(reference, 8192);
+    reference.setParameter(ParamId::AmpAttack, 10.0f);
+    const double rmsReference = rms(renderMono(reference, 44)); // ~1 ms, 2 voices steady
+
+    engine.noteOn(55, 100.0f);          // voice 3 — G3; headroom target 0.8 → 0.667
+    const double rmsAfter = rms(renderMono(engine, 44));
+
+    // Without smoothing: rmsAfter ≈ 0.833 × rmsBefore (0.667/0.8)
+    // With 5 ms smoothing: rmsAfter ≈ rmsBefore
+    EXPECT_GT(rmsAfter, rmsReference * 0.92)
+        << "Poly headroom must not drop voices 1+2 when 3rd note added "
+           "(rmsReference=" << rmsReference << " rmsAfter=" << rmsAfter << ")";
+}
+
+// The sample crossing from one held voice into a second note must not contain
+// an abrupt gain discontinuity. The second voice has a 10 s attack, so any
+// immediate jump here is the existing voice being stepped by the headroom gain.
+TEST(SynthEngineAudioTest, PolyHeadroomSmoothingNoClick)
+{
+    SynthEngine engine;
+    setupHeadroomPatch(engine);
+
+    engine.noteOn(48, 100.0f);
+    renderMono(engine, 8192);
+    engine.setParameter(ParamId::AmpAttack, 10.0f);
+
+    float lastBefore = 0.0f;
+    float previous = 0.0f;
+    double normalMaxDelta = 0.0;
+    for (int i = 0; i < 512; ++i) {
+        previous = lastBefore;
+        lastBefore = engine.processSample();
+        if (i > 0)
+            normalMaxDelta = std::max(normalMaxDelta, std::abs(static_cast<double>(lastBefore - previous)));
+    }
+
+    engine.noteOn(60, 100.0f);
+    const float firstAfter = engine.processSample();
+    const double transitionDelta = std::abs(static_cast<double>(firstAfter - lastBefore));
+
+    EXPECT_LT(transitionDelta, std::max(0.08, normalMaxDelta * 4.0))
+        << "Poly headroom smoothing must avoid an immediate gain discontinuity "
+           "(transitionDelta=" << transitionDelta
+        << ", normalMaxDelta=" << normalMaxDelta << ")";
+}
+
+// Rapid addition of all 4 poly voices must produce finite, bounded output
+// throughout — no NaN, no Inf, no wild amplitude transients.
+TEST(SynthEngineAudioTest, PolyHeadroomFourVoiceAdditionIsFiniteAndBounded)
+{
+    SynthEngine engine;
+    setupHeadroomPatch(engine);
+
+    engine.noteOn(48, 100.0f);
+    const auto w1 = renderMono(engine, 512);
+
+    engine.noteOn(52, 100.0f);
+    const auto w2 = renderMono(engine, 512);
+
+    engine.noteOn(55, 100.0f);
+    const auto w3 = renderMono(engine, 512);
+
+    engine.noteOn(59, 100.0f);
+    const auto w4 = renderMono(engine, 512);
+
+    for (const auto* w : {&w1, &w2, &w3, &w4}) {
+        const auto st = statsFor(*w);
+        EXPECT_TRUE(st.finite) << "NaN/Inf during poly headroom transition";
+        EXPECT_LT(st.peak, 2.5)  << "Peak too large during poly headroom transition";
+    }
 }
