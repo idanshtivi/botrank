@@ -80,6 +80,12 @@ add_executable(WavRender
 )
 target_link_libraries(WavRender PRIVATE SynthCoreLib)
 
+# ── Audio safety diagnostic tool ─────────────────────────────────────────────
+add_executable(AudioSafetyCheck
+    Tools/audio_safety_check.cpp
+)
+target_link_libraries(AudioSafetyCheck PRIVATE SynthCoreLib)
+
 # ── Test executable ───────────────────────────────────────────────────────────
 if(SYNTH_CORE_BUILD_TESTS)
 add_executable(SynthCoreTests
@@ -110,7 +116,7 @@ endif()
 
 if(MINIMOOG_USE_TRUSTED_BIN)
     file(MAKE_DIRECTORY "${MINIMOOG_TRUSTED_BIN_DIR}")
-    set(trusted_bin_targets WavRender)
+    set(trusted_bin_targets WavRender AudioSafetyCheck)
     if(SYNTH_CORE_BUILD_TESTS)
         list(APPEND trusted_bin_targets SynthCoreTests)
     endif()
