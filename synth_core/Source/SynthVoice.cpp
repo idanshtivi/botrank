@@ -153,6 +153,7 @@ void SynthVoice::resetAudioChainState()
     _dcBlockX = 0.0;
     _dcBlockY = 0.0;
     _pitchIsFirstSample = true;
+    mixer.reset();
 }
 
 double SynthVoice::_midiFromHz(double hz)
