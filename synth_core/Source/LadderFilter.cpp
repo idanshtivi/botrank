@@ -76,7 +76,7 @@ double LadderFilter::processSample(double input, double filterEnvelopeValue, dou
     // Stable filter input push — no feedbackReturn, no sweep, no self-oscillation change.
     const double panelDrive = DriveUtils::normDrive(_drive);
     const double mainPush = DriveUtils::normDrive(_mainDrivePush);
-    const double mainPushCurve = std::pow(mainPush, 0.48);
+    const double mainPushCurve = std::pow(mainPush, 2.2);
     const double fd = DriveUtils::clamp01(panelDrive + 0.78 * mainPushCurve * (1.0 - 0.25 * panelDrive));
 
     if (fd > 0.001) {
