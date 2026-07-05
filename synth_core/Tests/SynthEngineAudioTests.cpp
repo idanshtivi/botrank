@@ -1934,6 +1934,57 @@ TEST(PitchDeclickTest, LegatoNoEnvelopeRetriggerWhenRetriggerOff)
            "(rmsBefore=" << rmsBefore << " rmsAfter=" << rmsAfter << ")";
 }
 
+// Case D — Legato ON, Retrigger OFF: once every key is released, a new note
+// must fully retrigger the envelope even while the previous note's release
+// tail is still audible. Regression test for a bug where the legato gate was
+// keyed off envelope activity (isActive(), true throughout Release) instead
+// of physical key-held state, so a note played during a release tail was
+// incorrectly treated as a legato continuation and never retriggered.
+TEST(PitchDeclickTest, LegatoRetriggersAfterAllKeysReleasedDuringReleaseTail)
+{
+    SynthEngine engine;
+    engine.prepare(44100.0, 512);
+    engine.setParameter(ParamId::PlayMode,        0.0f);
+    engine.setParameter(ParamId::Legato,          1.0f);
+    engine.setParameter(ParamId::Retrigger,       0.0f);
+    engine.setParameter(ParamId::Osc1Level,       1.0f);
+    engine.setParameter(ParamId::Osc2Enabled,     0.0f);
+    engine.setParameter(ParamId::Osc3Enabled,     0.0f);
+    engine.setParameter(ParamId::AmpAttack,       0.01f);  // fast attack: retrigger recovers almost instantly
+    engine.setParameter(ParamId::AmpDecay,        0.05f);
+    engine.setParameter(ParamId::AmpSustain,      1.0f);
+    engine.setParameter(ParamId::AmpRelease,      0.3f);   // slow enough that the tail is still clearly audible
+    engine.setParameter(ParamId::MixerDrive,      0.0f);
+    engine.setParameter(ParamId::FilterDrive,     0.0f);
+    engine.setParameter(ParamId::FilterCutoff,    20000.0f);
+    engine.setParameter(ParamId::FilterEnvAmount, 0.0f);
+    engine.setParameter(ParamId::LfoAmount,       0.0f);
+    engine.setParameter(ParamId::ModWheelAmount,  0.0f);
+
+    engine.noteOn(60, 100.0f); // C4
+    renderMono(engine, 44100); // reach full sustain
+    const double sustainRms = rms(renderMono(engine, 512)); // reference: full-scale sustain level
+
+    engine.noteOff(60);        // every key released — release tail begins (0.3s)
+    const double tailRms = rms(renderMono(engine, 11025)); // ~250ms into a 300ms release: still clearly audible
+    ASSERT_GT(tailRms, sustainRms * 0.05)
+        << "Precondition failed: release tail must still be audible before the next noteOn "
+           "(sustainRms=" << sustainRms << " tailRms=" << tailRms << ")";
+
+    engine.noteOn(64, 100.0f); // E4 — no key was held; must be a full retrigger, not legato
+    renderMono(engine, 4410);  // ~100ms: enough for the fast attack/decay to settle at sustain
+    const double rmsAfterRetrigger = rms(renderMono(engine, 512));
+
+    // Without the fix, the envelope stays in Release and keeps decaying toward 0
+    // (it would be silent well before 350ms into a 300ms release). With the fix,
+    // the fast attack/decay pulls it back up to the sustain level, matching the
+    // originally measured sustain RMS.
+    EXPECT_GT(rmsAfterRetrigger, sustainRms * 0.7)
+        << "New note after all keys released must fully retrigger the envelope, "
+           "even during a still-audible release tail (sustainRms=" << sustainRms
+        << " tailRms=" << tailRms << " rmsAfterRetrigger=" << rmsAfterRetrigger << ")";
+}
+
 // Case C — Poly 4 voice stealing: audio must remain stable when voices are stolen.
 TEST(PitchDeclickTest, PolyVoiceStealAudioStable)
 {

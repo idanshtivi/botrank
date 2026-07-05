@@ -8,7 +8,7 @@ juce_add_plugin(LadderVoice
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE
-    FORMATS Standalone)
+    FORMATS Standalone VST3)
 
 target_sources(LadderVoice
     PRIVATE
@@ -16,13 +16,30 @@ target_sources(LadderVoice
         Source/PluginEditor.cpp
         Source/PluginProcessor.cpp
         Source/PresetManager.cpp
-        Source/PresetBrowser.cpp)
+        Source/PresetBrowser.cpp
+        Source/Typography.cpp)
 
 juce_add_binary_data(LadderVoiceAssets
     SOURCES
         Resources/Knobs/knob_large_strip.png
         Resources/Knobs/knob_medium_strip.png
         Resources/Knobs/knob_small_strip.png)
+
+# Embedded UI typefaces (Archivo + IBM Plex, SIL OFL). Optional: Typography.cpp
+# falls back to platform fonts if Resources/Fonts is ever empty, so the build
+# remains usable without the intended instrument typefaces.
+file(GLOB LADDERVOICE_FONT_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Fonts/*.otf")
+if(LADDERVOICE_FONT_FILES)
+    # Distinct NAMESPACE/HEADER_NAME so this target's generated header never
+    # collides with LadderVoiceAssets' own BinaryData.h/BinaryData:: symbols.
+    juce_add_binary_data(LadderVoiceFonts
+        NAMESPACE FontData
+        HEADER_NAME FontBinaryData.h
+        SOURCES
+            ${LADDERVOICE_FONT_FILES})
+endif()
 
 target_include_directories(LadderVoice
     PRIVATE
@@ -46,6 +63,11 @@ target_compile_definitions(LadderVoice
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0)
+
+if(LADDERVOICE_FONT_FILES)
+    target_link_libraries(LadderVoice PRIVATE LadderVoiceFonts)
+    target_compile_definitions(LadderVoice PRIVATE LADDERVOICE_HAS_EMBEDDED_FONTS=1)
+endif()
 
 set(TRUSTED_BIN_DIR "${CMAKE_SOURCE_DIR}/trusted_bin")
 file(MAKE_DIRECTORY "${TRUSTED_BIN_DIR}")
@@ -100,4 +122,12 @@ if(WIN32)
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass -Command
                 "& { $f='$<TARGET_FILE:LadderVoice_Standalone>'; if(Test-Path -LiteralPath $f){Remove-Item -LiteralPath ($f+':Zone.Identifier') -ErrorAction SilentlyContinue; Unblock-File -LiteralPath $f -ErrorAction SilentlyContinue} }"
         COMMENT "Removing Mark-of-the-Web from standalone executable")
+
+    add_custom_command(TARGET LadderVoice_Standalone POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "${CMAKE_CURRENT_BINARY_DIR}/LadderVoice_artefacts/$<CONFIG>/Standalone"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:LadderVoice_Standalone>"
+                "${CMAKE_CURRENT_BINARY_DIR}/LadderVoice_artefacts/$<CONFIG>/Standalone/Ladder Voice.exe"
+        COMMENT "Updating legacy standalone launch path")
 endif()

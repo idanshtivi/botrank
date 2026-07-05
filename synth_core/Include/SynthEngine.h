@@ -192,6 +192,12 @@ private:
     double          _modWheelPosition   = 0.0;
     OutputStage     _output;
 
+    // Sustain pedal (MIDI CC64) state: while held, real note-offs are
+    // deferred (the note keeps sounding) and flushed on pedal-up.
+    bool                     _sustainPedalDown = false;
+    std::array<bool, 128>   _sustainedNotes {};
+    void _releaseSustainedNotes();
+
     // Parameter smoothers – one per parameter
     ParamSmoother _smoothers[kParamCount];
 

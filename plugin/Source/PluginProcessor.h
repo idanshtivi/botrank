@@ -13,6 +13,10 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override;
+    // Host-triggered reset (transport stop/reposition, etc.) — must clear any
+    // stuck/active notes and realtime MIDI state (pitch bend, mod wheel,
+    // sustain pedal) without disturbing the current patch's parameter values.
+    void reset() override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }

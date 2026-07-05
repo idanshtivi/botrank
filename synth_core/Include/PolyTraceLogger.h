@@ -139,16 +139,21 @@ struct CracklePayload {
 };
 
 // ─── Union event (fixed 128 bytes, cache-line × 2 aligned) ───────────────────
+// Header padded to 8 bytes (was 3, giving a 4-byte header) so the union
+// below — which holds uint64_t members and therefore needs 8-byte alignment
+// — starts exactly on that boundary. At a 4-byte header the compiler had to
+// insert 4 more bytes before the union to align it, pushing the whole
+// struct (rounded up for alignas(16)) to 144 bytes instead of 128.
 struct alignas(16) TraceEvent {
     TraceEventType type;
-    uint8_t        _pad[3];
+    uint8_t        _pad[7];
     union {
         BlockPayload    block;
         NotePayload     note;
         AllocPayload    alloc;
         SnapshotPayload snapshot;
         CracklePayload  crackle;
-        uint8_t         _raw[124];
+        uint8_t         _raw[120];
     };
 };
 static_assert(sizeof(TraceEvent) == 128, "TraceEvent must be 128 bytes");
@@ -279,8 +284,20 @@ private:
         float    sampleRate    = 44100.0f;
     } _ctx;
 
+    // C4324 (struct padded due to alignment specifier) is the intended
+    // effect here — alignas(64) puts _wPos and _rPos on separate cache
+    // lines so the audio and writer threads don't false-share — but this
+    // project builds with warnings-as-errors, so it needs an explicit
+    // suppression rather than silently failing the build.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4324)
+#endif
     alignas(64) std::atomic<uint32_t> _wPos{0};  // written by audio thread
     alignas(64) std::atomic<uint32_t> _rPos{0};  // written by writer thread
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
     std::atomic<uint32_t> _dropped{0};
     std::atomic<bool>     _active{false};
@@ -291,6 +308,7 @@ private:
     // Writer thread and file handles live in Impl (defined in .cpp) to keep
     // <thread> / <fstream> out of the audio-thread-side header.
     void _writerMain();
+    void _writeEvent(const TraceEvent& e);
 
     struct Impl;
     Impl* _impl = nullptr;

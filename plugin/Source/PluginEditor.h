@@ -52,6 +52,7 @@ private:
     void drawSection(juce::Graphics& g, juce::Rectangle<int> bounds, const juce::String& title);
     void positionControlLabels();
     void updatePulseWidthControlState();
+    void fitPresetNameLabelFont();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LadderVoiceAudioProcessorEditor)
 };

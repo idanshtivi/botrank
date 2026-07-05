@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PresetManager.h"
+#include <map>
 
 // Forward declaration
 class LadderVoiceAudioProcessor;
@@ -22,6 +23,7 @@ public:
     // ListBoxModel
     int  getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics&, int w, int h, bool selected) override;
+    void listBoxItemClicked(int row, const juce::MouseEvent&) override;
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
     void selectedRowsChanged(int lastRowSelected) override;
 
@@ -38,13 +40,24 @@ private:
     juce::TextButton saveBtn  {"Save As..."};
     juce::TextButton deleteBtn{"Delete"};
 
-    // Rebuilt each time the browser opens / user saves
-    struct Entry { juce::String name; bool isUser; int sourceIndex; };
+    // Rebuilt each time the browser opens / user saves. isHeader marks a
+    // collapsible section row (category or "USER PRESETS"); its children are
+    // simply omitted from `entries` while collapsed, so getNumRows() shrinks
+    // and grows as sections open/close.
+    struct Entry { juce::String name; bool isUser; int sourceIndex; bool isHeader = false; };
     std::vector<Entry> entries;
+
+    // Collapsed/expanded state per section header name, preserved across
+    // rebuilds (Save/Delete) so opening/closing a library sticks until the
+    // user changes it again. Populated with sensible defaults the first time
+    // rebuildEntries() runs.
+    std::map<juce::String, bool> collapsed;
+    bool collapsedInitialised = false;
 
     int hoveredRow = -1; // for subtle hover highlight
 
     void rebuildEntries();
+    void toggleSection(const juce::String& header);
     void loadSelected();
     void saveAs();
     void deleteSelected();

@@ -1,0 +1,14 @@
+Satoshi typeface — Indian Type Foundry, distributed via Fontshare
+(https://www.fontshare.com/fonts/satoshi)
+
+Fontshare license summary: free for personal and commercial use in any
+number of end products (apps, websites, branding, print, etc.), no
+attribution required. The font files themselves may not be resold,
+sublicensed, or redistributed as a standalone font product (e.g. re-hosted
+on another font marketplace or bundled as a "font pack").
+
+This embeds the font as a display resource inside the LadderVoice plugin
+binary, which is a normal end-use case under this license, not
+redistribution of the font files themselves.
+
+Full current terms: https://www.fontshare.com/licenses/general

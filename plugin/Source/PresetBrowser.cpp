@@ -1,5 +1,7 @@
 #include "PresetBrowser.h"
 #include "PluginProcessor.h"
+#include "Typography.h"
+#include <algorithm>
 
 namespace {
 // Shared palette — mirrors Theme namespace in PluginEditor.cpp
@@ -13,11 +15,6 @@ const auto textMuted   = juce::Colour(0xff8f8772);
 const auto selBg       = juce::Colour(0xff5a3f18); // warm amber selection
 const auto hoverBg     = juce::Colour(0xff251c0e); // very dark warm brown — subtle hover
 const auto sepBg       = juce::Colour(0xff201d16);
-
-juce::FontOptions uiFont(float size, int style = juce::Font::plain)
-{
-    return juce::FontOptions("Segoe UI", size, style);
-}
 
 // Draws text with explicit per-character pixel tracking using GlyphArrangement.
 // JUCE 8 removed Font::getStringWidth; GlyphArrangement is the correct measurement API.
@@ -101,21 +98,98 @@ PresetBrowser::PresetBrowser(LadderVoiceAudioProcessor& proc,
 
 void PresetBrowser::rebuildEntries()
 {
-    entries.clear();
     auto& mgr = processor.presetManager;
     mgr.refreshUserPresets();
 
-    entries.push_back({"FACTORY PRESETS", false, -1});
+    // Factory presets grouped by category as collapsible sections (click a
+    // header to open/close it) instead of one long mixed list — the fixed
+    // order here matches how the bank was designed (Bass -> Lead -> Brass ->
+    // Glide Lead -> Keys -> Pluck -> Pad -> Sweep). "Init" has no header of
+    // its own since it's a single utility entry, not a sound category.
+    static const juce::StringArray kCategoryOrder {
+        "Bass", "Lead", "Brass", "Glide Lead", "Keys", "Pluck", "Pad", "Sweep"
+    };
+
+    // First time through: default every section collapsed except the one
+    // containing the currently-loaded preset, so the browser opens compact
+    // (just section names) but still shows where you are.
+    if (!collapsedInitialised) {
+        collapsedInitialised = true;
+        juce::String currentCategory;
+        for (int i = 0; i < mgr.getNumFactoryPresets(); ++i) {
+            const auto& p = mgr.getFactoryPreset(i);
+            if (p.name.equalsIgnoreCase(mgr.getCurrentPresetName())) {
+                currentCategory = p.category;
+                break;
+            }
+        }
+        for (auto& category : kCategoryOrder)
+            collapsed[category.toUpperCase()] = !category.equalsIgnoreCase(currentCategory);
+        // If the current preset wasn't found among factory presets, it must be
+        // a user preset — expand USER PRESETS by default in that case.
+        collapsed["USER PRESETS"] = !currentCategory.isEmpty();
+    }
+
+    entries.clear();
+
+    std::vector<int> remaining;
     for (int i = 0; i < mgr.getNumFactoryPresets(); ++i)
-        entries.push_back({mgr.getFactoryPreset(i).name, false, i});
+        remaining.push_back(i);
+
+    // Init first, ungrouped, if present.
+    for (auto it = remaining.begin(); it != remaining.end(); ) {
+        if (mgr.getFactoryPreset(*it).category.equalsIgnoreCase("Init")) {
+            entries.push_back({mgr.getFactoryPreset(*it).name, false, *it, false});
+            it = remaining.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto& category : kCategoryOrder) {
+        std::vector<int> inCategory;
+        for (int i : remaining)
+            if (mgr.getFactoryPreset(i).category.equalsIgnoreCase(category))
+                inCategory.push_back(i);
+        if (inCategory.empty())
+            continue;
+
+        const auto headerName = category.toUpperCase();
+        entries.push_back({headerName, false, -1, true});
+        if (collapsed[headerName]) {
+            for (int i : inCategory)
+                remaining.erase(std::find(remaining.begin(), remaining.end(), i));
+            continue;
+        }
+        for (int i : inCategory) {
+            entries.push_back({mgr.getFactoryPreset(i).name, false, i, false});
+            remaining.erase(std::find(remaining.begin(), remaining.end(), i));
+        }
+    }
+
+    // Anything with a category outside the known list still shows up, rather
+    // than silently disappearing if a future preset's category is renamed.
+    if (!remaining.empty()) {
+        entries.push_back({"OTHER", false, -1, true});
+        if (!collapsed["OTHER"])
+            for (int i : remaining)
+                entries.push_back({mgr.getFactoryPreset(i).name, false, i, false});
+    }
 
     if (mgr.getNumUserPresets() > 0) {
-        entries.push_back({"USER PRESETS", true, -1});
-        for (int i = 0; i < mgr.getNumUserPresets(); ++i)
-            entries.push_back({mgr.getUserPresetName(i), true, i});
+        entries.push_back({"USER PRESETS", true, -1, true});
+        if (!collapsed["USER PRESETS"])
+            for (int i = 0; i < mgr.getNumUserPresets(); ++i)
+                entries.push_back({mgr.getUserPresetName(i), true, i, false});
     }
 
     listBox.updateContent();
+}
+
+void PresetBrowser::toggleSection(const juce::String& header)
+{
+    collapsed[header] = !collapsed[header];
+    rebuildEntries();
 }
 
 // ─── Preset actions (functional — unchanged) ─────────────────────────────────
@@ -135,6 +209,14 @@ void PresetBrowser::loadSelected()
 
     mgr.setCurrentPresetName(e.name);
     if (onPresetLoaded) onPresetLoaded(e.name);
+}
+
+void PresetBrowser::listBoxItemClicked(int row, const juce::MouseEvent&)
+{
+    if (row < 0 || row >= (int)entries.size()) return;
+    const auto& e = entries[(size_t)row];
+    if (e.isHeader)
+        toggleSection(e.name);
 }
 
 void PresetBrowser::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
@@ -255,11 +337,12 @@ void PresetBrowser::paintListBoxItem(int row, juce::Graphics& g, int w, int h, b
 {
     if (row < 0 || row >= (int)entries.size()) return;
     const auto& e = entries[(size_t)row];
-    const bool isSep = (e.sourceIndex < 0);
 
-    if (isSep) {
-        // Section header row — slightly darker background, gold accent line on left
-        g.setColour(sepBg);
+    if (e.isHeader) {
+        // Section header row — click to open/close. Slightly darker
+        // background, gold accent line on left, chevron shows current state.
+        const bool isOpen = !collapsed[e.name];
+        g.setColour(row == hoveredRow ? sepBg.brighter(0.06f) : sepBg);
         g.fillAll();
         // Gold left accent bar
         g.setColour(accentGold.withAlpha(0.55f));
@@ -268,10 +351,19 @@ void PresetBrowser::paintListBoxItem(int row, juce::Graphics& g, int w, int h, b
         g.setColour(sectionBdr.withAlpha(0.40f));
         g.drawLine(0, 0, (float)w, 0, 0.7f);
         g.drawLine(0, (float)h - 0.7f, (float)w, (float)h - 0.7f, 0.7f);
+        // Chevron: ▸ collapsed, ▾ open
+        g.setColour(accentGold.withAlpha(0.85f));
+        g.setFont(Typography::popupGroupHeader());
+        g.drawText(isOpen ? juce::String::fromUTF8("\xe2\x96\xbe") : juce::String::fromUTF8("\xe2\x96\xb8"),
+                   10, 0, 16, h, juce::Justification::centred);
         // Label — manual tracking for visible hardware-style letter spacing
         g.setColour(textMuted.brighter(0.08f));
-        g.setFont(juce::Font(uiFont(12.0f, juce::Font::bold)));
-        drawTrackedText(g, e.name, 10.0f, 0.0f, (float)(w - 10), (float)h, 1.1f,
+        constexpr float groupTrackPx = 0.45f;
+        constexpr float labelIndent = 26.0f;
+        const float availableW = (float)(w - labelIndent - 8);
+        const float groupManualWidth = juce::jmax(0, e.name.length() - 1) * groupTrackPx;
+        g.setFont(Typography::fitToWidth(Typography::popupGroupHeader(), e.name, availableW - groupManualWidth));
+        drawTrackedText(g, e.name, labelIndent, 0.0f, availableW, (float)h, groupTrackPx,
                         juce::Justification::centredLeft);
         return;
     }
@@ -300,8 +392,10 @@ void PresetBrowser::paintListBoxItem(int row, juce::Graphics& g, int w, int h, b
     const int indent = selected ? 10 : (e.isUser ? 16 : 10);
     const float textAlpha = selected ? 1.0f : (row == hoveredRow ? 0.92f : 0.82f);
     g.setColour(selected ? textCream.brighter(0.10f) : textCream.withAlpha(textAlpha));
-    g.setFont(juce::Font(uiFont(14.0f, e.isUser ? juce::Font::italic : juce::Font::plain)).withExtraKerningFactor(0.008f));
-    g.drawText(e.name, indent, 0, w - indent - 6, h, juce::Justification::centredLeft);
+    const auto entryBase = e.isUser ? Typography::popupEntryItalic() : Typography::popupEntry();
+    const int entryWidth = w - indent - 6;
+    g.setFont(Typography::fitToWidth(entryBase, e.name, static_cast<float>(entryWidth)));
+    g.drawText(e.name, indent, 0, entryWidth, h, juce::Justification::centredLeft);
 
     // Subtle bottom hairline
     g.setColour(sectionBdr.withAlpha(0.18f));
@@ -334,41 +428,22 @@ void PresetBrowser::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0x18ffffff));
     g.drawRoundedRectangle(bounds.reduced(2.5f), 5.5f, 0.60f);
 
-    // Header strip — matches drawSection() style, now taller for breathing room
-    auto headerArea = bounds.withHeight(kHeaderH + 6.0f).reduced(1.0f, 1.0f);
-    headerArea.setBottom(kHeaderH + 5.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffaaa99f), bounds.getX(), bounds.getY(),
-                                           juce::Colour(0xff939188), bounds.getX(), headerArea.getBottom(), false));
-    g.fillRoundedRectangle(headerArea, 6.0f);
-    g.setColour(juce::Colour(0xffaaa99f));
-    g.fillRect(headerArea.withTrimmedTop(headerArea.getHeight() - 7.0f));
-
-    // Gold divider under header
-    g.setColour(accentGold.withAlpha(0.35f));
-    g.drawLine(bounds.getX() + 10.0f, kHeaderH + 5.0f, bounds.getRight() - 10.0f, kHeaderH + 5.0f, 0.85f);
-
-    // "PRESETS" title — manually tracked for visible hardware label feel
+    // Header — flat treatment matching PluginEditor's drawSection(): no
+    // filled bar and no corner screws (those read as a separate raised
+    // module, which the main panel moved away from this session). Just the
+    // title text and a thin engraved-groove rule underneath.
     g.setColour(juce::Colour(0xff11110f));
-    g.setFont(juce::Font(uiFont(15.0f, juce::Font::bold)));
-    drawTrackedText(g, "PRESETS", bounds.getX() + 26.0f, 4.0f, 110.0f, kHeaderH, 1.5f,
+    constexpr float titleTrackPx = 0.55f;
+    constexpr float titleBoxWidth = 110.0f;
+    const float titleManualWidth = juce::jmax(0, juce::String("PRESETS").length() - 1) * titleTrackPx;
+    g.setFont(Typography::fitToWidth(Typography::popupTitle(), "PRESETS", titleBoxWidth - titleManualWidth));
+    drawTrackedText(g, "PRESETS", bounds.getX() + 18.0f, 4.0f, titleBoxWidth, kHeaderH, titleTrackPx,
                     juce::Justification::centredLeft);
 
-    // Corner screws
-    const float screwY = kHeaderH * 0.5f + 2.5f;
-    auto drawScrew = [&](float cx, float cy) {
-        auto r = juce::Rectangle<float>(8.0f, 8.0f).withCentre({cx, cy});
-        g.setColour(juce::Colour(0x55000000));
-        g.fillEllipse(r.translated(0.0f, 0.8f));
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffffd88a), r.getX(), r.getY(),
-                                               juce::Colour(0xff4a2b0d), r.getRight(), r.getBottom(), false));
-        g.fillEllipse(r);
-        g.setColour(juce::Colour(0xff0a0a08));
-        g.drawEllipse(r, 0.85f);
-        g.setColour(juce::Colour(0xdddddddd));
-        g.drawLine(r.getX() + 1.5f, cy + 0.3f, r.getRight() - 1.5f, cy - 0.3f, 0.85f);
-    };
-    drawScrew(bounds.getX() + 14.0f, screwY);
-    drawScrew(bounds.getRight() - 14.0f, screwY);
+    g.setColour(juce::Colour(0x30000000));
+    g.drawLine(bounds.getX() + 10.0f, kHeaderH + 5.0f, bounds.getRight() - 10.0f, kHeaderH + 5.0f, 0.8f);
+    g.setColour(juce::Colour(0x20ffffff));
+    g.drawLine(bounds.getX() + 10.0f, kHeaderH + 6.0f, bounds.getRight() - 10.0f, kHeaderH + 6.0f, 0.8f);
 }
 
 // ─── Layout ──────────────────────────────────────────────────────────────────

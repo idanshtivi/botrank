@@ -293,12 +293,53 @@ void SynthEngine::processMidi(const uint8_t* data, int numBytes)
         const double normalized = (static_cast<double>(value14) - 8192.0) / 8192.0;
         setPitchBend(normalized * _params[static_cast<int>(ParamId::PitchBendRange)]);
     } else if (status == 0xB0u && numBytes >= 3) {
-        if (data[1] == 1u) {
-            _modWheelPosition = static_cast<double>(data[2] & 0x7Fu) / 127.0;
-        } else if (data[1] == 123u) {
+        const uint8_t controller = data[1] & 0x7Fu;
+        const uint8_t value      = data[2] & 0x7Fu;
+        if (controller == 1u) {
+            _modWheelPosition = static_cast<double>(value) / 127.0;
+        } else if (controller == 64u) {
+            // Sustain pedal: while held, real note-offs are deferred (see
+            // noteOff()); on release, flush every note that was held only
+            // by the pedal.
+            const bool down = value >= 64u;
+            if (down) {
+                _sustainPedalDown = true;
+            } else if (_sustainPedalDown) {
+                _sustainPedalDown = false;
+                _releaseSustainedNotes();
+            }
+        } else if (controller == 120u) {
+            // All Sound Off: silence immediately, ignoring release time —
+            // equivalent to a power-cycle, which is exactly what reset()
+            // already does without disturbing the current patch parameters.
+            reset();
+        } else if (controller == 121u) {
+            // Reset All Controllers: pitch bend/mod wheel/sustain back to
+            // default, but currently-held real notes keep sounding (unlike
+            // CC120, this is not a note-kill).
+            setPitchBend(0.0);
+            _modWheelPosition = 0.0;
+            if (_sustainPedalDown) {
+                _sustainPedalDown = false;
+                _releaseSustainedNotes();
+            }
+        } else if (controller == 123u) {
+            // All Notes Off
             _voiceCtrl.allNotesOff();
             _synthVoice.noteOff();
             _allPolyNotesOff();
+            _sustainPedalDown = false;
+            _sustainedNotes.fill(false);
+        }
+    }
+}
+
+void SynthEngine::_releaseSustainedNotes()
+{
+    for (int n = 0; n < static_cast<int>(_sustainedNotes.size()); ++n) {
+        if (_sustainedNotes[static_cast<size_t>(n)]) {
+            _sustainedNotes[static_cast<size_t>(n)] = false;
+            noteOff(n); // sustain is already off here, so this is a real release
         }
     }
 }
@@ -315,12 +356,28 @@ static void advanceRng(uint32_t& s)
 
 void SynthEngine::noteOn(int midiNote, float velocity)
 {
+    // A fresh key-down means this note is physically held again, not merely
+    // sustain-held — otherwise a later pedal-up would incorrectly cut off a
+    // note whose key is still down (press, release-under-pedal, re-press,
+    // then release the pedal).
+    {
+        const int note = std::clamp(midiNote, 0, 127);
+        _sustainedNotes[static_cast<size_t>(note)] = false;
+    }
+
     if (_playMode == 0) {
         const bool wasActive  = _synthVoice.isActive();
+        // Legato gate must reflect physical key-held state, not envelope
+        // activity: _voiceCtrl.isGateHigh() is true iff the note stack is
+        // non-empty (a key is actually down), whereas _synthVoice.isActive()
+        // stays true through a still-decaying release tail even after every
+        // key has been released. Read before _voiceCtrl.noteOn() below,
+        // which mutates the stack/gate state for the incoming note.
+        const bool wasKeyHeld = _voiceCtrl.isGateHigh();
         const bool legatoMode = _params[static_cast<int>(ParamId::Legato)]   >= 0.5f;
         const bool retrigMode = _params[static_cast<int>(ParamId::Retrigger)] >= 0.5f;
         // Legato suppresses envelope retrigger only when Retrigger is also off.
-        const bool isLegato   = wasActive && legatoMode && !retrigMode;
+        const bool isLegato   = wasKeyHeld && legatoMode && !retrigMode;
 
         _voiceCtrl.noteOn(midiNote, velocity);
         // In legato mode (no retrigger), keep envelopes running continuously.
@@ -440,6 +497,14 @@ void SynthEngine::noteOn(int midiNote, float velocity)
 
 void SynthEngine::noteOff(int midiNote)
 {
+    if (_sustainPedalDown) {
+        // Defer the real release until the pedal comes up — the key was
+        // lifted, but the note must keep sounding.
+        const int note = std::clamp(midiNote, 0, 127);
+        _sustainedNotes[static_cast<size_t>(note)] = true;
+        return;
+    }
+
     if (_playMode == 0) {
         _voiceCtrl.noteOff(midiNote);
         _voiceCtrl.process();
@@ -710,6 +775,8 @@ void SynthEngine::reset()
     _pitchBendSemitones = 0.0;
     _lfo.reset();
     _modWheelPosition = 0.0;
+    _sustainPedalDown = false;
+    _sustainedNotes.fill(false);
     _output.reset();
     _railSag              = 0.0f;
     _polyHeadroomSmoothed = 1.0f;

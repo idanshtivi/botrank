@@ -70,190 +70,384 @@ void PresetManager::buildFactoryPresets()
     // 0 – Init (exact engine defaults)
     factoryPresets.push_back({"Init", "Init", makePreset({})});
 
-    // 1 – Modern Solid Bass
-    factoryPresets.push_back({"Modern Solid Bass", "Bass", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    2},   // 16'
-        {"osc1Level",    1.0f},
-        {"osc2Enabled",  0.0f},
-        {"mixerDrive",   1.8f},
-        {"filterCutoff", 900.0f}, {"filterResonance", 0.18f},
-        {"filterContour",0.35f},
-        {"filterAttack", 0.005f}, {"filterDecay", 0.35f}, {"filterSustain", 0.0f}, {"filterRelease", 0.18f},
-        {"loudnessAttack",0.005f},{"loudnessDecay",0.22f},{"loudnessSustain",0.0f},{"loudnessRelease",0.12f},
-        {"filterKeyboardTracking", 1.0f},
+    // ─── THICK BASSES (mono, filter tracks keyboard) ───────────────────────
+    factoryPresets.push_back({"Fathom Bass", "Bass", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 1}, {"osc1Level", 0.90f},          // Saw, 32'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 2}, {"osc2Level", 0.60f}, {"osc2Detune", 0.03f}, // Square, 16'
+        {"mixerDrive", 1.6f},
+        {"filterCutoff", 380.0f}, {"filterResonance", 0.22f}, {"filterContour", 0.55f},
+        {"filterAttack", 0.003f}, {"filterDecay", 0.32f}, {"filterSustain", 0.05f}, {"filterRelease", 0.15f},
+        {"filterDrive", 0.6f}, {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.15f}, {"loudnessRelease", 0.12f},
+        {"masterVolume", 0.60f},
     })});
 
-    // 2 – Fat Sub Drive Bass
-    factoryPresets.push_back({"Fat Sub Drive Bass", "Bass", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    2},   // 16'
-        {"osc1Level",    0.80f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 4},   // Square
-        {"osc2Range",    1},   // 32'
-        {"osc2Level",    0.55f},
-        {"osc2Detune",   0.0f},
-        {"mixerDrive",   2.2f},
-        {"filterCutoff", 650.0f}, {"filterResonance", 0.10f},
-        {"filterContour",0.25f},
-        {"filterAttack", 0.005f}, {"filterDecay", 0.55f}, {"filterSustain", 0.0f}, {"filterRelease", 0.20f},
-        {"loudnessAttack",0.005f},{"loudnessDecay",0.40f},{"loudnessSustain",0.0f},{"loudnessRelease",0.18f},
-        {"filterDrive",  1.0f},
+    factoryPresets.push_back({"Analog Growl Bass", "Bass", makePreset({
+        {"osc1Waveform", 5}, {"osc1Range", 2}, {"osc1Level", 1.0f}, {"osc1PulseWidth", 0.35f}, // Wide pulse, 16'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.25f},     // Saw, 8'
+        {"mixerDrive", 1.8f},
+        {"filterCutoff", 420.0f}, {"filterResonance", 0.38f}, {"filterContour", 0.45f},
+        {"filterAttack", 0.003f}, {"filterDecay", 0.30f}, {"filterSustain", 0.0f}, {"filterRelease", 0.14f},
+        {"filterDrive", 0.9f}, {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.0f}, {"loudnessRelease", 0.12f},
+        {"masterVolume", 0.58f},
     })});
 
-    // 3 – Dark Techno Bass
-    factoryPresets.push_back({"Dark Techno Bass", "Bass", makePreset({
-        {"osc1Waveform", 5},   // Wide pulse
-        {"osc1Range",    2},   // 16'
-        {"osc1Level",    1.0f},
-        {"osc2Enabled",  0.0f},
-        {"osc1PulseWidth",0.30f},
-        {"mixerDrive",   2.0f},
-        {"filterCutoff", 480.0f}, {"filterResonance", 0.22f},
-        {"filterContour",0.40f},
-        {"filterAttack", 0.005f}, {"filterDecay", 0.28f}, {"filterSustain", 0.0f}, {"filterRelease", 0.15f},
-        {"loudnessAttack",0.005f},{"loudnessDecay",0.30f},{"loudnessSustain",0.0f},{"loudnessRelease",0.12f},
-        {"filterDrive",  0.80f},
-        {"filterKeyboardTracking", 1.0f},
+    factoryPresets.push_back({"Vintage Ladder Bass", "Bass", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 2}, {"osc1Level", 0.85f},          // Saw, 16'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 2}, {"osc2Level", 0.55f}, {"osc2Detune", 0.06f}, // Saw, 16'
+        {"mixerDrive", 1.4f},
+        {"filterCutoff", 520.0f}, {"filterResonance", 0.16f}, {"filterContour", 0.30f},
+        {"filterAttack", 0.004f}, {"filterDecay", 0.45f}, {"filterSustain", 0.20f}, {"filterRelease", 0.20f},
+        {"filterDrive", 0.5f}, {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.35f}, {"loudnessSustain", 0.30f}, {"loudnessRelease", 0.18f},
+        {"masterVolume", 0.60f},
     })});
 
-    // 4 – Bright Modern Lead
-    factoryPresets.push_back({"Bright Modern Lead", "Lead", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    0.85f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 2},
-        {"osc2Range",    3},
-        {"osc2Level",    0.35f},
-        {"osc2Detune",   0.08f},
-        {"mixerDrive",   1.2f},
-        {"filterCutoff", 7000.0f}, {"filterResonance", 0.30f},
-        {"filterContour",0.20f},
-        {"filterAttack", 0.008f}, {"filterDecay", 0.40f}, {"filterSustain", 0.60f}, {"filterRelease", 0.30f},
-        {"loudnessAttack",0.010f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",0.25f},
+    factoryPresets.push_back({"Sub Foundation Bass", "Bass", makePreset({
+        {"osc1Waveform", 0}, {"osc1Range", 1}, {"osc1Level", 0.90f},          // Triangle, 32'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 2}, {"osc2Level", 0.35f},     // Saw, 16'
+        {"mixerDrive", 1.0f},
+        {"filterCutoff", 340.0f}, {"filterResonance", 0.08f}, {"filterContour", 0.15f},
+        {"filterAttack", 0.006f}, {"filterDecay", 0.50f}, {"filterSustain", 0.40f}, {"filterRelease", 0.30f},
+        {"filterDrive", 0.3f}, {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.006f}, {"loudnessDecay", 0.40f}, {"loudnessSustain", 0.55f}, {"loudnessRelease", 0.28f},
+        {"masterVolume", 0.62f},
+    })});
+
+    // ─── CLASSIC SOLO LEADS (mono) ──────────────────────────────────────────
+    factoryPresets.push_back({"Singing Saw Lead", "Lead", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.10f},
+        {"mixerDrive", 1.1f},
+        {"filterCutoff", 6500.0f}, {"filterResonance", 0.28f}, {"filterContour", 0.18f},
+        {"filterAttack", 0.006f}, {"filterDecay", 0.35f}, {"filterSustain", 0.65f}, {"filterRelease", 0.28f},
         {"filterKeyboardTracking", 2.0f},
-        {"pitchBendRange", 7.0f},
-        {"glideEnabled",  0.0f},
+        {"loudnessAttack", 0.008f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.22f},
+        {"pitchBendRange", 2.0f}, {"masterVolume", 0.58f},
     })});
 
-    // 5 – Soft Analog Lead
-    factoryPresets.push_back({"Soft Analog Lead", "Lead", makePreset({
-        {"osc1Waveform", 0},   // Tri
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    0.90f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 0},
-        {"osc2Range",    3},
-        {"osc2Level",    0.40f},
-        {"osc2Detune",   0.04f},
-        {"mixerDrive",   0.8f},
-        {"filterCutoff", 4200.0f}, {"filterResonance", 0.15f},
-        {"filterContour",0.10f},
-        {"filterAttack", 0.05f}, {"filterDecay", 0.30f}, {"filterSustain", 0.80f}, {"filterRelease", 0.40f},
-        {"loudnessAttack",0.04f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",0.35f},
+    factoryPresets.push_back({"Analog Screamer Lead", "Lead", makePreset({
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.85f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 4}, {"osc2Level", 0.35f}, {"osc2Detune", 0.08f}, // Square, 4'
+        {"mixerDrive", 1.6f},
+        {"filterCutoff", 5200.0f}, {"filterResonance", 0.48f}, {"filterContour", 0.25f},
+        {"filterAttack", 0.004f}, {"filterDecay", 0.30f}, {"filterSustain", 0.55f}, {"filterRelease", 0.25f},
+        {"filterDrive", 0.9f}, {"filterKeyboardTracking", 2.0f},
+        {"loudnessAttack", 0.005f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Classic Unison Lead", "Lead", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.55f}, {"osc2Detune", 0.15f},
+        {"mixerDrive", 1.2f},
+        {"filterCutoff", 6000.0f}, {"filterResonance", 0.22f}, {"filterContour", 0.15f},
+        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.70f}, {"filterRelease", 0.28f},
+        {"filterKeyboardTracking", 2.0f},
+        {"loudnessAttack", 0.006f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.25f},
+        {"pitchBendRange", 7.0f}, {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Warm Reed Lead", "Lead", makePreset({
+        {"osc1Waveform", 1}, {"osc1Range", 3}, {"osc1Level", 0.85f},          // TriangleSaw, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f}, // Triangle, 8'
+        {"mixerDrive", 0.8f},
+        {"filterCutoff", 3200.0f}, {"filterResonance", 0.14f}, {"filterContour", 0.12f},
+        {"filterAttack", 0.03f}, {"filterDecay", 0.30f}, {"filterSustain", 0.75f}, {"filterRelease", 0.35f},
         {"filterKeyboardTracking", 1.0f},
-        {"glideEnabled",  1.0f}, {"glideTime", 0.10f},
-        {"pitchBendRange", 2.0f},
+        {"loudnessAttack", 0.025f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.30f},
+        {"masterVolume", 0.60f},
     })});
 
-    // 6 – Short Pluck
-    factoryPresets.push_back({"Short Pluck", "Pluck", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    1.0f},
-        {"osc2Enabled",  0.0f},
-        {"mixerDrive",   1.0f},
-        {"filterCutoff", 5000.0f}, {"filterResonance", 0.25f},
-        {"filterContour",0.60f},
-        {"filterAttack", 0.001f}, {"filterDecay", 0.18f}, {"filterSustain", 0.0f}, {"filterRelease", 0.10f},
-        {"loudnessAttack",0.001f},{"loudnessDecay",0.18f},{"loudnessSustain",0.0f},{"loudnessRelease",0.10f},
-    })});
-
-    // 7 – Bright Pluck
-    factoryPresets.push_back({"Bright Pluck", "Pluck", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    0.75f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 0},   // Tri
-        {"osc2Range",    4},   // 4'
-        {"osc2Level",    0.45f},
-        {"osc2Detune",   0.05f},
-        {"mixerDrive",   1.3f},
-        {"filterCutoff", 8000.0f}, {"filterResonance", 0.35f},
-        {"filterContour",0.70f},
-        {"filterAttack", 0.001f}, {"filterDecay", 0.22f}, {"filterSustain", 0.0f}, {"filterRelease", 0.12f},
-        {"loudnessAttack",0.001f},{"loudnessDecay",0.25f},{"loudnessSustain",0.0f},{"loudnessRelease",0.12f},
+    // ─── VINTAGE BRASS (poly 4) ─────────────────────────────────────────────
+    factoryPresets.push_back({"Analog Horn Section", "Brass", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.75f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.05f}, // Saw, 8'
+        {"mixerDrive", 1.1f},
+        {"filterCutoff", 2600.0f}, {"filterResonance", 0.20f}, {"filterContour", 0.55f},
+        {"filterAttack", 0.06f}, {"filterDecay", 0.25f}, {"filterSustain", 0.65f}, {"filterRelease", 0.30f},
         {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.03f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.28f},
+        {"masterVolume", 0.55f},
     })});
 
-    // 8 – Warm Poly Chord
-    factoryPresets.push_back({"Warm Poly Chord", "Poly", makePreset({
-        {"playMode",     1.0f}, // POLY 4
-        {"osc1Waveform", 1},   // Tri-Saw
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    0.70f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 0},   // Tri
-        {"osc2Range",    3},
-        {"osc2Level",    0.40f},
-        {"osc2Detune",   0.06f},
-        {"mixerDrive",   0.8f},
-        {"filterCutoff", 3500.0f}, {"filterResonance", 0.08f},
-        {"filterContour",0.10f},
-        {"filterAttack", 0.02f}, {"filterDecay", 0.40f}, {"filterSustain", 0.70f}, {"filterRelease", 0.55f},
-        {"loudnessAttack",0.015f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",0.55f},
+    factoryPresets.push_back({"Vintage Brass Ensemble", "Brass", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.70f},          // Saw, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.06f}, // Square, 8'
+        {"mixerDrive", 1.0f},
+        {"filterCutoff", 2200.0f}, {"filterResonance", 0.16f}, {"filterContour", 0.60f},
+        {"filterAttack", 0.09f}, {"filterDecay", 0.30f}, {"filterSustain", 0.70f}, {"filterRelease", 0.35f},
         {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.05f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.32f},
+        {"masterVolume", 0.55f},
     })});
 
-    // 9 – Dark Poly Chord
-    factoryPresets.push_back({"Dark Poly Chord", "Poly", makePreset({
-        {"playMode",     1.0f}, // POLY 4
-        {"osc1Waveform", 4},   // Square
-        {"osc1Range",    3},   // 8'
-        {"osc1Level",    0.65f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 4},   // Square
-        {"osc2Range",    2},   // 16'
-        {"osc2Level",    0.40f},
-        {"osc2Detune",   0.0f},
-        {"mixerDrive",   1.0f},
-        {"filterCutoff", 1800.0f}, {"filterResonance", 0.14f},
-        {"filterContour",0.08f},
-        {"filterAttack", 0.02f}, {"filterDecay", 0.50f}, {"filterSustain", 0.60f}, {"filterRelease", 0.60f},
-        {"loudnessAttack",0.015f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",0.60f},
-    })});
-
-    // 10 – Noise Sweep
-    factoryPresets.push_back({"Noise Sweep", "FX", makePreset({
-        {"osc1Enabled",  0.0f},
-        {"osc2Enabled",  0.0f},
-        {"noiseLevel",   0.80f}, {"noiseMode", 1.0f}, // Pink
-        {"mixerDrive",   0.5f},
-        {"filterCutoff", 200.0f}, {"filterResonance", 0.45f},
-        {"filterContour",0.85f},
-        {"filterAttack", 2.50f}, {"filterDecay", 1.50f}, {"filterSustain", 0.30f}, {"filterRelease", 1.00f},
-        {"loudnessAttack",0.10f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",1.20f},
-    })});
-
-    // 11 – Filter Riser
-    factoryPresets.push_back({"Filter Riser", "FX", makePreset({
-        {"osc1Waveform", 2},   // Saw
-        {"osc1Range",    2},   // 16'
-        {"osc1Level",    0.70f},
-        {"osc2Enabled",  1.0f},
-        {"osc2Waveform", 4},   // Square
-        {"osc2Range",    3},
-        {"osc2Level",    0.50f},
-        {"osc2Detune",   0.10f},
-        {"mixerDrive",   1.5f},
-        {"filterCutoff", 120.0f}, {"filterResonance", 0.30f},
-        {"filterContour",1.00f},
-        {"filterAttack", 4.00f}, {"filterDecay", 0.80f}, {"filterSustain", 0.0f}, {"filterRelease", 0.50f},
-        {"loudnessAttack",0.005f},{"loudnessDecay",0.0f},{"loudnessSustain",1.0f},{"loudnessRelease",0.40f},
+    factoryPresets.push_back({"Punchy Brass Stab", "Brass", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.50f}, {"osc2Detune", 0.05f},
+        {"mixerDrive", 1.3f},
+        {"filterCutoff", 3000.0f}, {"filterResonance", 0.30f}, {"filterContour", 0.65f},
+        {"filterAttack", 0.005f}, {"filterDecay", 0.18f}, {"filterSustain", 0.30f}, {"filterRelease", 0.15f},
         {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.20f}, {"loudnessSustain", 0.35f}, {"loudnessRelease", 0.14f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Mellow Brass Pad", "Brass", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 1}, {"osc1Range", 3}, {"osc1Level", 0.70f},          // TriangleSaw, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.05f}, // Saw, 8'
+        {"mixerDrive", 0.8f},
+        {"filterCutoff", 1900.0f}, {"filterResonance", 0.10f}, {"filterContour", 0.35f},
+        {"filterAttack", 0.15f}, {"filterDecay", 0.30f}, {"filterSustain", 0.75f}, {"filterRelease", 0.45f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.12f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.45f},
+        {"masterVolume", 0.55f},
+    })});
+
+    // ─── EXPRESSIVE GLIDE LEADS (mono, legato + glide on) ──────────────────
+    factoryPresets.push_back({"Slide Lead", "Glide Lead", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.06f},
+        {"mixerDrive", 1.1f},
+        {"filterCutoff", 5000.0f}, {"filterResonance", 0.22f}, {"filterContour", 0.15f},
+        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.65f}, {"filterRelease", 0.25f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.008f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.22f},
+        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.12f},
+        {"pitchBendRange", 2.0f}, {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Portamento Solo", "Glide Lead", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.03f},
+        {"mixerDrive", 1.1f},
+        {"filterCutoff", 4200.0f}, {"filterResonance", 0.18f}, {"filterContour", 0.15f},
+        {"filterAttack", 0.008f}, {"filterDecay", 0.30f}, {"filterSustain", 0.70f}, {"filterRelease", 0.30f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.01f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.28f},
+        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.25f},
+        {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Fluid Mono Lead", "Glide Lead", makePreset({
+        {"osc1Waveform", 1}, {"osc1Range", 3}, {"osc1Level", 0.90f},          // TriangleSaw, 8'
+        {"osc2Enabled", 0.0f},
+        {"mixerDrive", 0.9f},
+        {"filterCutoff", 5500.0f}, {"filterResonance", 0.20f}, {"filterContour", 0.12f},
+        {"filterAttack", 0.005f}, {"filterDecay", 0.25f}, {"filterSustain", 0.70f}, {"filterRelease", 0.22f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.006f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
+        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.08f},
+        {"masterVolume", 0.60f},
+    })});
+
+    factoryPresets.push_back({"Synth Whistle Glide", "Glide Lead", makePreset({
+        {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.95f},          // Triangle, 8'
+        {"osc2Enabled", 0.0f},
+        {"mixerDrive", 0.6f},
+        {"filterCutoff", 2600.0f}, {"filterResonance", 0.06f}, {"filterContour", 0.08f},
+        {"filterAttack", 0.02f}, {"filterDecay", 0.20f}, {"filterSustain", 0.80f}, {"filterRelease", 0.30f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.02f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.35f},
+        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.35f},
+        {"masterVolume", 0.62f},
+    })});
+
+    // ─── WARM ANALOG KEYS (poly 4) ──────────────────────────────────────────
+    factoryPresets.push_back({"Warm Analog Piano", "Keys", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.75f},          // Triangle, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.03f}, // Saw, 8'
+        {"mixerDrive", 0.9f},
+        {"filterCutoff", 3200.0f}, {"filterResonance", 0.15f}, {"filterContour", 0.40f},
+        {"filterAttack", 0.002f}, {"filterDecay", 0.40f}, {"filterSustain", 0.35f}, {"filterRelease", 0.30f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.002f}, {"loudnessDecay", 0.55f}, {"loudnessSustain", 0.55f}, {"loudnessRelease", 0.35f},
+        {"masterVolume", 0.60f},
+    })});
+
+    factoryPresets.push_back({"Velvet Keys", "Keys", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 1}, {"osc1Range", 3}, {"osc1Level", 0.75f},          // TriangleSaw, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.05f}, // Triangle, 8'
+        {"mixerDrive", 0.7f},
+        {"filterCutoff", 2400.0f}, {"filterResonance", 0.10f}, {"filterContour", 0.25f},
+        {"filterAttack", 0.04f}, {"filterDecay", 0.35f}, {"filterSustain", 0.65f}, {"filterRelease", 0.40f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.03f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.40f},
+        {"masterVolume", 0.60f},
+    })});
+
+    factoryPresets.push_back({"Classic Clav Keys", "Keys", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.75f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 4}, {"osc2Level", 0.35f},                        // Square, 4'
+        {"mixerDrive", 1.2f},
+        {"filterCutoff", 3500.0f}, {"filterResonance", 0.30f}, {"filterContour", 0.55f},
+        {"filterAttack", 0.002f}, {"filterDecay", 0.20f}, {"filterSustain", 0.15f}, {"filterRelease", 0.15f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.002f}, {"loudnessDecay", 0.25f}, {"loudnessSustain", 0.20f}, {"loudnessRelease", 0.15f},
+        {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Analog Organ Keys", "Keys", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.65f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 4}, {"osc2Level", 0.40f},                        // Square, 4'
+        {"mixerDrive", 0.8f},
+        {"filterCutoff", 4500.0f}, {"filterResonance", 0.08f}, {"filterContour", 0.05f},
+        {"filterAttack", 0.002f}, {"filterDecay", 0.10f}, {"filterSustain", 1.0f}, {"filterRelease", 0.10f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.002f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.10f},
+        {"masterVolume", 0.58f},
+    })});
+
+    // ─── SHORT PLUCKS (2 mono, 2 poly) ──────────────────────────────────────
+    factoryPresets.push_back({"Analog Pluck", "Pluck", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 1.0f},
+        {"osc2Enabled", 0.0f},
+        {"mixerDrive", 1.0f},
+        {"filterCutoff", 4800.0f}, {"filterResonance", 0.25f}, {"filterContour", 0.65f},
+        {"filterAttack", 0.001f}, {"filterDecay", 0.15f}, {"filterSustain", 0.0f}, {"filterRelease", 0.10f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.001f}, {"loudnessDecay", 0.16f}, {"loudnessSustain", 0.0f}, {"loudnessRelease", 0.10f},
+        {"masterVolume", 0.60f},
+    })});
+
+    factoryPresets.push_back({"Muted Pluck Bass", "Pluck", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 2}, {"osc1Level", 1.0f},          // Saw, 16'
+        {"osc2Enabled", 0.0f},
+        {"mixerDrive", 1.3f},
+        {"filterCutoff", 1200.0f}, {"filterResonance", 0.18f}, {"filterContour", 0.55f},
+        {"filterAttack", 0.001f}, {"filterDecay", 0.10f}, {"filterSustain", 0.0f}, {"filterRelease", 0.06f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.001f}, {"loudnessDecay", 0.10f}, {"loudnessSustain", 0.0f}, {"loudnessRelease", 0.06f},
+        {"masterVolume", 0.60f},
+    })});
+
+    factoryPresets.push_back({"Poly Pluck Keys", "Pluck", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.75f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.07f},
+        {"mixerDrive", 0.9f},
+        {"filterCutoff", 4200.0f}, {"filterResonance", 0.20f}, {"filterContour", 0.50f},
+        {"filterAttack", 0.001f}, {"filterDecay", 0.20f}, {"filterSustain", 0.0f}, {"filterRelease", 0.12f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.001f}, {"loudnessDecay", 0.22f}, {"loudnessSustain", 0.0f}, {"loudnessRelease", 0.12f},
+        {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Bright Pluck Bell", "Pluck", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.65f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 5}, {"osc2Level", 0.40f},                        // Triangle, 2'
+        {"mixerDrive", 0.9f},
+        {"filterCutoff", 7000.0f}, {"filterResonance", 0.30f}, {"filterContour", 0.75f},
+        {"filterAttack", 0.001f}, {"filterDecay", 0.25f}, {"filterSustain", 0.0f}, {"filterRelease", 0.15f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.001f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.0f}, {"loudnessRelease", 0.15f},
+        {"masterVolume", 0.55f},
+    })});
+
+    // ─── VINTAGE PADS (poly 4, slow attack, long release) ──────────────────
+    factoryPresets.push_back({"Slow Analog Pad", "Pad", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.65f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.55f}, {"osc2Detune", 0.12f},
+        {"mixerDrive", 0.7f},
+        {"filterCutoff", 2800.0f}, {"filterResonance", 0.12f}, {"filterContour", 0.20f},
+        {"filterAttack", 0.7f}, {"filterDecay", 0.6f}, {"filterSustain", 0.8f}, {"filterRelease", 1.5f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.8f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 1.8f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Warm String Pad", "Pad", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.60f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 4}, {"osc2Level", 0.35f}, {"osc2Detune", 0.08f}, // Saw, 4'
+        {"mixerDrive", 0.7f},
+        {"filterCutoff", 2400.0f}, {"filterResonance", 0.10f}, {"filterContour", 0.15f},
+        {"filterAttack", 0.5f}, {"filterDecay", 0.5f}, {"filterSustain", 0.85f}, {"filterRelease", 1.2f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.5f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 1.4f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Misty Triangle Pad", "Pad", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.65f},          // Triangle, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.10f},
+        {"mixerDrive", 0.5f},
+        {"filterCutoff", 1800.0f}, {"filterResonance", 0.06f}, {"filterContour", 0.10f},
+        {"filterAttack", 0.9f}, {"filterDecay", 0.5f}, {"filterSustain", 0.85f}, {"filterRelease", 1.8f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 1.0f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 2.0f},
+        {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Analog Choir Pad", "Pad", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.55f},          // Saw, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.09f}, // Square, 8'
+        {"mixerDrive", 0.7f},
+        {"filterCutoff", 2200.0f}, {"filterResonance", 0.14f}, {"filterContour", 0.45f},
+        {"filterAttack", 0.6f}, {"filterDecay", 0.7f}, {"filterSustain", 0.75f}, {"filterRelease", 1.4f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.6f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 1.5f},
+        {"masterVolume", 0.55f},
+    })});
+
+    // ─── CLASSIC FILTER SWEEPS ───────────────────────────────────────────────
+    factoryPresets.push_back({"Rising Filter Sweep", "Sweep", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.70f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.06f},
+        {"mixerDrive", 1.0f},
+        {"filterCutoff", 200.0f}, {"filterResonance", 0.35f}, {"filterContour", 1.0f},
+        {"filterAttack", 2.5f}, {"filterDecay", 0.8f}, {"filterSustain", 0.6f}, {"filterRelease", 0.8f},
+        {"filterKeyboardTracking", 0.5f},
+        {"loudnessAttack", 0.02f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.6f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Resonant Sweep Bass", "Sweep", makePreset({
+        {"osc1Waveform", 2}, {"osc1Range", 2}, {"osc1Level", 0.90f},          // Saw, 16'
+        {"osc2Enabled", 0.0f},
+        {"mixerDrive", 1.2f},
+        {"filterCutoff", 150.0f}, {"filterResonance", 0.55f}, {"filterContour", 1.0f},
+        {"filterAttack", 1.8f}, {"filterDecay", 0.5f}, {"filterSustain", 0.4f}, {"filterRelease", 0.6f},
+        {"filterKeyboardTracking", 0.5f},
+        {"loudnessAttack", 0.01f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.5f},
+        {"masterVolume", 0.55f},
+    })});
+
+    factoryPresets.push_back({"Vintage Auto-Wah Sweep", "Sweep", makePreset({
+        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.85f},          // Square, 8'
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.04f},
+        {"mixerDrive", 1.1f},
+        {"filterCutoff", 3500.0f}, {"filterResonance", 0.30f}, {"filterContour", 0.75f},
+        {"filterAttack", 0.005f}, {"filterDecay", 1.2f}, {"filterSustain", 0.15f}, {"filterRelease", 0.5f},
+        {"filterKeyboardTracking", 1.0f},
+        {"loudnessAttack", 0.005f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.5f},
+        {"masterVolume", 0.58f},
+    })});
+
+    factoryPresets.push_back({"Emphasis Riser Sweep", "Sweep", makePreset({
+        {"playMode", 1.0f},
+        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.60f},
+        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 4}, {"osc2Level", 0.45f}, {"osc2Detune", 0.10f}, // Saw, 4'
+        {"mixerDrive", 0.9f},
+        {"filterCutoff", 150.0f}, {"filterResonance", 0.40f}, {"filterContour", 1.0f},
+        {"filterAttack", 4.0f}, {"filterDecay", 0.8f}, {"filterSustain", 0.7f}, {"filterRelease", 1.0f},
+        {"filterKeyboardTracking", 0.3f},
+        {"loudnessAttack", 0.3f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 1.0f},
+        {"masterVolume", 0.55f},
     })});
 }
 

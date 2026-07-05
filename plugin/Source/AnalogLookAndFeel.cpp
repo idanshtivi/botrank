@@ -1,16 +1,24 @@
 #include "AnalogLookAndFeel.h"
 #include "BinaryData.h"
+#include "Typography.h"
 
 namespace {
-juce::FontOptions uiFont(float size, int style = juce::Font::plain)
-{
-    return juce::FontOptions("Segoe UI", size, style);
-}
-
-const auto accentGold = juce::Colour(0xff96783c);
-const auto valueFill = juce::Colour(0xff514a3c);
+// Mirrors Theme:: in PluginEditor.cpp (separate file/namespace, so kept in
+// sync by hand) — updated alongside this session's warm-brown palette pass.
+// valueFill in particular was too close to the new panel's own brown to
+// read as a distinct inset display.
+// Toned back down from an earlier, more saturated pass — at full/near-full
+// alpha on 9 combo-box outlines plus every knob's ticks, that brightness
+// stacked into a genuinely tiring amount of bright warm accent on screen.
+const auto accentGold = juce::Colour(0xffab8148);
+const auto valueFill = juce::Colour(0xff342c20);
 const auto valueText = juce::Colour(0xffebe8d7);
-const auto softBorder = juce::Colour(0xff736e5f);
+const auto softBorder = juce::Colour(0xff3c3020);
+// Muted bronze-brown, distinct from accentGold — combo box borders in
+// particular still read as a bright contrasting yellow ring even after
+// accentGold itself was toned down; this keeps the same warm family but
+// desaturated enough to look like part of the chassis, not a decal.
+const auto comboBorder = juce::Colour(0xff7a6242);
 
 // Draws text with explicit per-character pixel tracking using GlyphArrangement.
 // JUCE 8 removed Font::getStringWidth; GlyphArrangement is the correct measurement API.
@@ -54,10 +62,14 @@ AnalogLookAndFeel::AnalogLookAndFeel()
     setColour(juce::Slider::textBoxTextColourId, valueText);
     setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0x00101010));
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0x002c281e));
-    setColour(juce::Label::textColourId, juce::Colour(0xff171713));
+    // Default Label fallback — muted (was a brighter cream, dialled back
+    // now that the engraved shadow/highlight carries legibility instead of
+    // flat colour contrast). Most labels set their own colour explicitly;
+    // this only covers any that don't.
+    setColour(juce::Label::textColourId, juce::Colour(0xffcbbc9c));
     setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff151511));
     setColour(juce::ComboBox::textColourId, juce::Colour(0xfff1dfb7));
-    setColour(juce::ComboBox::outlineColourId, accentGold);
+    setColour(juce::ComboBox::outlineColourId, comboBorder);
     setColour(juce::ComboBox::arrowColourId, juce::Colour(0xfff1dfb7));
     setColour(juce::PopupMenu::backgroundColourId, juce::Colour(0xff171713));
     setColour(juce::PopupMenu::textColourId, juce::Colour(0xfff1dfb7));
@@ -92,9 +104,22 @@ void AnalogLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
     if (strip.isValid() && strip.getWidth() > 0 && strip.getHeight() >= filmstripFrameCount) {
         const int frameHeight = strip.getHeight() / filmstripFrameCount;
         if (frameHeight > 0) {
-            const int frameIndex = juce::jlimit(0, filmstripFrameCount - 1,
-                                                juce::roundToInt(sliderPosProportional * static_cast<float>(filmstripFrameCount - 1)));
-            const int sourceY = frameIndex * frameHeight;
+            // Sub-frame rotation instead of cross-fading two frames: each
+            // frame is a fully independent raster (ticks, brushed-metal
+            // texture noise etc. don't line up pixel-for-pixel between
+            // adjacent frames), so blending two of them made those static
+            // details visibly shimmer/waver during rotation instead of
+            // staying put. Drawing a single frame and rotating it by the
+            // small residual angle keeps every pixel consistent — ticks and
+            // texture rotate together with the pointer, as they physically
+            // would, with no blending artifacts.
+            const float framePos = juce::jlimit(0.0f, static_cast<float>(filmstripFrameCount - 1),
+                                                sliderPosProportional * static_cast<float>(filmstripFrameCount - 1));
+            const int frameA = static_cast<int>(framePos);
+            const float frameFrac = framePos - static_cast<float>(frameA);
+            const int sourceY = frameA * frameHeight;
+            const float perFrameAngle = (rotaryEndAngle - rotaryStartAngle) / static_cast<float>(filmstripFrameCount - 1);
+            const float subFrameRotation = frameFrac * perFrameAngle;
             const float frameAspect = static_cast<float>(strip.getWidth()) / static_cast<float>(frameHeight);
             auto dest = knobBox;
             if (frameAspect > 1.0f)
@@ -102,13 +127,42 @@ void AnalogLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int wi
             else
                 dest = dest.withWidth(dest.getHeight() * frameAspect).withCentre(knobBox.getCentre());
 
-            g.setOpacity(alpha);
+            // Solid backing behind the face before the image — pixel-sampled
+            // the source art directly and the pale "face" pixels are only
+            // ~20% opaque (a shading/highlight pass, not a solid fill), so
+            // they were letting whatever sits behind them (the panel's own
+            // colour, which varies by knob position) bleed through. Against
+            // the old light cream panel that accidentally looked fine;
+            // against the new warm-brown panel it read as inconsistent,
+            // slightly-different-per-knob murkiness ("something's off").
+            // A solid warm-pewter disc gives the translucent face a
+            // consistent backing to blend against instead.
+            const auto faceDiameter = juce::jmin(dest.getWidth(), dest.getHeight()) * 0.55f;
+            const auto face = juce::Rectangle<float>(faceDiameter, faceDiameter).withCentre(dest.getCentre());
+            g.setColour(juce::Colour(0xffc7c0ac).withMultipliedAlpha(alpha));
+            g.fillEllipse(face);
+
             g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
             const auto destInt = dest.toNearestInt();
-            g.drawImage(strip,
-                        destInt.getX(), destInt.getY(), destInt.getWidth(), destInt.getHeight(),
-                        0, sourceY, strip.getWidth(), frameHeight);
-            g.setOpacity(1.0f);
+            {
+                juce::Graphics::ScopedSaveState saveState(g);
+                if (subFrameRotation != 0.0f)
+                    g.addTransform(juce::AffineTransform::rotation(subFrameRotation, dest.getCentreX(), dest.getCentreY()));
+                g.setOpacity(alpha);
+                g.drawImage(strip,
+                            destInt.getX(), destInt.getY(), destInt.getWidth(), destInt.getHeight(),
+                            0, sourceY, strip.getWidth(), frameHeight);
+                g.setOpacity(1.0f);
+            }
+
+            // Dimming ring removed — at 45% it made the tick marks around
+            // the rim too weak/hard to see at the edges. Ticks now render
+            // exactly as the source art has them, full brightness.
+            // A custom amber pointer + accent dot was tried here (drawn on
+            // top of the source art's own thin pointer) to improve
+            // readability at small sizes, but read as an unwanted look
+            // change rather than an improvement — reverted back to relying
+            // solely on the source art's own indicator.
             return;
         }
     }
@@ -259,20 +313,38 @@ void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
             .withCentre({ bounds.getCentreX(),
                           bounds.getY() + labelH + 1.0f + frameSize * 0.5f });
 
-        // LABEL
-        g.setColour(button.isEnabled() ? juce::Colour(0xff1a1814) : juce::Colour(0xff77756c));
-        g.setFont(uiFont(12.5f, juce::Font::bold));
-        g.drawFittedText(button.getButtonText().toUpperCase(),
-                         juce::Rectangle<float>(bounds.getX(), bounds.getY(),
-                                                bounds.getWidth(), labelH).toNearestInt(),
-                         juce::Justification::centred, 1, 0.85f);
+        // LABEL — muted cream, engraved like every other caption on the
+        // panel (was a brighter flat colour with no shadow/highlight).
+        const auto pushLabelText = button.getButtonText().toUpperCase();
+        const auto pushLabelBounds = juce::Rectangle<float>(bounds.getX(), bounds.getY(),
+                                                             bounds.getWidth(), labelH).toNearestInt();
+        g.setFont(Typography::fitToWidth(Typography::toggleLabelMedium(), pushLabelText, static_cast<float>(pushLabelBounds.getWidth())));
+        Typography::drawEngraved(g, pushLabelText, pushLabelBounds,
+                                 button.isEnabled() ? juce::Colour(0xffcbbc9c) : juce::Colour(0xff8a7d68),
+                                 juce::Justification::centred);
 
         // Snap to pixel grid for crisp rendering
         const auto fr = frame.toNearestInt().toFloat();
 
-        // Drop shadow
-        g.setColour(juce::Colours::black.withAlpha(pressed ? 0.32f : 0.80f));
-        g.fillRoundedRectangle(fr.translated(pressed ? 1.0f : 2.0f, pressed ? 1.0f : 3.5f).expanded(1.2f), frameCr + 1.0f);
+        // Drop shadow — simulated with a few offset, decreasing-alpha
+        // rounded rects instead of juce::DropShadow. DropShadow rasterizes
+        // and Gaussian-blurs a fresh image on every single paint call with
+        // no caching; called for every button on every repaint, that's
+        // real, avoidable CPU cost on top of an already-busier frame this
+        // session (per-knob solid backing fill, image draw + rotation
+        // transform, tick-dimming ring). This gives a comparable soft-edge
+        // look for a few cheap fillRoundedRectangle calls.
+        {
+            const int   offset = pressed ? 1 : 3;
+            const float baseAlpha = pressed ? 0.28f : 0.55f;
+            for (int i = 3; i >= 1; --i) {
+                const float t = static_cast<float>(i) / 3.0f;
+                g.setColour(juce::Colours::black.withAlpha(baseAlpha * (1.0f - t) + 0.06f));
+                g.fillRoundedRectangle(fr.translated(static_cast<float>(offset) * t, static_cast<float>(offset + 2) * t)
+                                          .expanded(t * 1.5f),
+                                       frameCr + t * 1.5f);
+            }
+        }
 
         // FRAME — bakelite, pixel-crisp
         {
@@ -288,8 +360,11 @@ void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
             g.setColour(juce::Colour(0xff050402));
             g.drawRoundedRectangle(fr.reduced(0.75f), frameCr, 1.5f);
 
-            // Bronze/brass inlay — 1.2px (not 0.9px) for visible crispness
-            g.setColour(juce::Colour(0xffb08840).withAlpha(hover ? 0.90f : 0.75f));
+            // Bronze/brass inlay — same muted comboBorder tone used for
+            // dropdowns (was a separate, brighter hardcoded gold that stood
+            // out against the warm-brown panel the same way the combo box
+            // borders did before that fix).
+            g.setColour(comboBorder.withAlpha(hover ? 0.90f : 0.75f));
             g.drawRoundedRectangle(fr.reduced(1.8f), frameCr - 0.8f, 1.2f);
 
             // All 4 bevel edges drawn as explicit lines (avoids rounded-rect blur on sides)
@@ -309,6 +384,16 @@ void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
             // Right shadow
             g.setColour(juce::Colours::black.withAlpha(0.58f));
             g.drawLine(fr.getRight()-1.5f, by1, fr.getRight()-1.5f, by2, 1.2f);
+
+            // Specular highlight — soft diagonal glare from the top-left,
+            // simulating studio-light reflecting off glossy bakelite
+            // plastic. Fills only the rounded-rect frame shape itself, so
+            // no extra clipping is needed.
+            g.setGradientFill(juce::ColourGradient(
+                juce::Colours::white.withAlpha(hover ? 0.20f : 0.14f), fr.getX(), fr.getY(),
+                juce::Colours::transparentWhite,
+                fr.getX() + fr.getWidth() * 0.65f, fr.getY() + fr.getHeight() * 0.6f, false));
+            g.fillRoundedRectangle(fr, frameCr);
         }
 
         // PUSH FACE — snapped square inset from frame
@@ -422,8 +507,9 @@ void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
         g.setColour(juce::Colour(0xff080604));
         g.drawRoundedRectangle(hou.reduced(0.5f), houCr, 1.5f);
 
-        // EDGE WEAR — visible warm bronze/brass line
-        g.setColour(juce::Colour(0xffb08840).withAlpha(hover ? 0.80f : 0.65f));
+        // EDGE WEAR — same muted comboBorder tone as the push buttons and
+        // dropdowns (was the same brighter hardcoded gold).
+        g.setColour(comboBorder.withAlpha(hover ? 0.80f : 0.65f));
         g.drawRoundedRectangle(hou.reduced(1.0f), houCr, 0.8f);
 
         // Top-left bevel highlight
@@ -558,33 +644,32 @@ void AnalogLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& 
         }
     }
 
-    // LABEL (xlarge and small rocker switches only — medium returns early above)
-    g.setColour(button.isEnabled() ? juce::Colour(0xff151511) : juce::Colour(0xff77756c));
+    // LABEL (xlarge and small rocker switches only — medium returns early
+    // above) — muted and engraved, same reasoning as the medium push-button
+    // label.
+    const auto rockerLabelColour = button.isEnabled() ? juce::Colour(0xffcbbc9c) : juce::Colour(0xff8a7d68);
+    const auto labelText = button.getButtonText().toUpperCase();
     if (xlarge)
     {
-        g.setFont(uiFont(10.3f, juce::Font::bold));
         // Centred above the housing for large switches
         const auto textBounds = juce::Rectangle<float>(
             hou.getX() - 4.0f,
-            hou.getY() - 16.0f,
+            hou.getY() - 18.0f,
             houW + 8.0f,
-            13.0f);
-        g.drawFittedText(button.getButtonText().toUpperCase(),
-                         textBounds.toNearestInt(),
-                         juce::Justification::centred, 1, 0.85f);
+            16.0f).toNearestInt();
+        g.setFont(Typography::fitToWidth(Typography::toggleLabelLarge(), labelText, static_cast<float>(textBounds.getWidth())));
+        Typography::drawEngraved(g, labelText, textBounds, rockerLabelColour, juce::Justification::centred);
     }
     else
     {
-        g.setFont(uiFont(10.3f, juce::Font::bold));
         // To the right of the housing for standard switches
         const auto textBounds = juce::Rectangle<float>(
             bounds.getX() + houW + 7.0f,
             hou.getY(),
             bounds.getWidth() - houW - 7.0f,
-            houH);
-        g.drawFittedText(button.getButtonText().toUpperCase(),
-                         textBounds.toNearestInt(),
-                         juce::Justification::centredLeft, 1, 0.85f);
+            houH).toNearestInt();
+        g.setFont(Typography::fitToWidth(Typography::toggleLabelLarge(), labelText, static_cast<float>(textBounds.getWidth())));
+        Typography::drawEngraved(g, labelText, textBounds, rockerLabelColour, juce::Justification::centredLeft);
     }
 }
 
@@ -599,7 +684,9 @@ void AnalogLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2a2a25), 0.0f, 0.0f,
                                            juce::Colour(0xff080807), 0.0f, static_cast<float>(height), false));
     g.fillRoundedRectangle(r, 4.5f);
-    g.setColour(box.isEnabled() ? accentGold.withAlpha(0.88f) : softBorder.withAlpha(0.55f));
+    // Alpha eased from 0.88 — 9 combo boxes on screen at once each drawing
+    // a near-fully-opaque gold ring made the panel busier than intended.
+    g.setColour(box.isEnabled() ? comboBorder.withAlpha(0.75f) : softBorder.withAlpha(0.55f));
     g.drawRoundedRectangle(r, 4.5f, 1.0f);
     g.setColour(juce::Colour(0x22fff0c0));
     g.drawRoundedRectangle(r.reduced(3.0f), 3.0f, 0.55f);
@@ -620,6 +707,12 @@ void AnalogLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
     juce::ignoreUnused(backgroundColour);
     auto r = button.getLocalBounds().toFloat().reduced(1.0f);
     const bool lightAction = button.getButtonText().equalsIgnoreCase("INIT");
+    // Preset prev/next nav buttons get the same muted comboBorder outline as
+    // every other interactive control on the panel (combo boxes, push
+    // buttons) instead of the brighter accentGold chrome meant for standalone
+    // action buttons like INIT — that bright border read as mismatched next
+    // to the rest of the preset strip.
+    const bool navButton = button.getName() == "presetNav";
     const auto top = lightAction ? (shouldDrawButtonAsDown ? juce::Colour(0xffc9b990) : juce::Colour(0xfffff1d0))
                                  : (shouldDrawButtonAsDown ? juce::Colour(0xff11110f) : juce::Colour(0xff30302b));
     const auto bottom = lightAction ? (shouldDrawButtonAsDown ? juce::Colour(0xfff1e6c8) : juce::Colour(0xffb28a46))
@@ -629,8 +722,13 @@ void AnalogLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
     g.fillRoundedRectangle(r.translated(0.0f, 1.6f), 5.0f);
     g.setGradientFill(juce::ColourGradient(top, r.getX(), r.getY(), bottom, r.getX(), r.getBottom(), false));
     g.fillRoundedRectangle(r, 5.0f);
-    g.setColour(shouldDrawButtonAsHighlighted ? juce::Colour(0xffffce70) : accentGold.withAlpha(0.90f));
-    g.drawRoundedRectangle(r.reduced(0.4f), 5.0f, shouldDrawButtonAsHighlighted ? 1.35f : 0.95f);
+    if (navButton) {
+        g.setColour(comboBorder.withAlpha(shouldDrawButtonAsHighlighted ? 0.90f : 0.70f));
+        g.drawRoundedRectangle(r.reduced(0.4f), 5.0f, shouldDrawButtonAsHighlighted ? 1.1f : 0.85f);
+    } else {
+        g.setColour(shouldDrawButtonAsHighlighted ? juce::Colour(0xffffce70) : accentGold.withAlpha(0.90f));
+        g.drawRoundedRectangle(r.reduced(0.4f), 5.0f, shouldDrawButtonAsHighlighted ? 1.35f : 0.95f);
+    }
     g.setColour(lightAction ? juce::Colour(0x88ffffff) : juce::Colour(0x32fff0c0));
     g.drawLine(r.getX() + 5.0f, r.getY() + 2.0f, r.getRight() - 5.0f, r.getY() + 2.0f, 0.9f);
 }
@@ -642,11 +740,17 @@ void AnalogLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& butt
     juce::ignoreUnused(shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
     const bool lightAction = button.getButtonText().equalsIgnoreCase("INIT");
     g.setColour(lightAction ? juce::Colour(0xff16130d) : juce::Colour(0xffffdf9a));
-    g.setFont(juce::Font(uiFont(13.0f, juce::Font::bold)));
+    const auto buttonText = button.getButtonText();
     const auto r = button.getLocalBounds().reduced(4, 1).toFloat();
-    drawTrackedText(g, button.getButtonText(),
+    constexpr float manualTrackPx = 0.35f;
+    // drawTrackedText adds manualTrackPx of hand-positioned spacing between
+    // every glyph on top of whatever the font itself measures — reserve that
+    // extra width up front so the combined result still fits inside r.
+    const float manualTrackingWidth = juce::jmax(0, buttonText.length() - 1) * manualTrackPx;
+    g.setFont(Typography::fitToWidth(Typography::buttonLabel(), buttonText, r.getWidth() - manualTrackingWidth));
+    drawTrackedText(g, buttonText,
                     r.getX(), r.getY(), r.getWidth(), r.getHeight(),
-                    0.85f, juce::Justification::centred);
+                    manualTrackPx, juce::Justification::centred);
 }
 
 void AnalogLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
@@ -666,8 +770,22 @@ void AnalogLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
         g.setColour(juce::Colour(0x2affffff));
         g.drawLine(r.getX() + 5.0f, r.getY() + 1.0f, r.getRight() - 5.0f, r.getY() + 1.0f, 0.65f);
         g.setColour(valueText);
-        g.setFont(uiFont(13.8f, juce::Font::bold));
-        g.drawText(label.getText(), label.getLocalBounds().reduced(3, 0), juce::Justification::centred, false);
+        const auto valueTextArea = label.getLocalBounds().reduced(3, 0);
+        g.setFont(Typography::fitToWidth(Typography::valueDisplay(), label.getText(), static_cast<float>(valueTextArea.getWidth())));
+        g.drawText(label.getText(), valueTextArea, juce::Justification::centred, false);
+        return;
+    }
+
+    // Every plain caption (WAVE, RANGE, MODE, DETUNE, section titles drawn
+    // via a Label, etc.) gets the same engraved/debossed look as the rest
+    // of the panel's text, instead of LookAndFeel_V4's flat default.
+    if (!label.isBeingEdited()) {
+        const auto border = label.getBorderSize();
+        const auto textArea = border.subtractedFrom(label.getLocalBounds());
+        g.setFont(label.getFont());
+        Typography::drawEngraved(g, label.getText(), textArea,
+                                 label.findColour(juce::Label::textColourId),
+                                 label.getJustificationType());
         return;
     }
 
@@ -676,8 +794,30 @@ void AnalogLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
 
 juce::Font AnalogLookAndFeel::getComboBoxFont(juce::ComboBox& box)
 {
-    juce::ignoreUnused(box);
-    return uiFont(12.0f, juce::Font::bold);
+    const auto base = Typography::comboBoxText();
+
+    // Text area matches positionComboBoxText's label bounds (9,1,w-30,h-2)
+    // minus the Label's own default 5px-each-side border.
+    const int usableWidth = box.getWidth() - 30 - 10;
+    if (usableWidth <= 0)
+        return base;
+
+    // Fit against the box's own widest item, not just its current selection,
+    // so every item renders at one consistent size and nothing truncates
+    // if the user later picks a longer entry.
+    juce::String widest;
+    float widestW = 0.0f;
+    for (int i = 0; i < box.getNumItems(); ++i)
+    {
+        const auto item = box.getItemText(i);
+        const float w = Typography::measuredWidth(base, item);
+        if (w > widestW) { widestW = w; widest = item; }
+    }
+
+    if (widest.isEmpty())
+        return base;
+
+    return Typography::fitToWidth(base, widest, static_cast<float>(usableWidth));
 }
 
 void AnalogLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)

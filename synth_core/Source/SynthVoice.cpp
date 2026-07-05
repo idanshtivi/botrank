@@ -103,10 +103,18 @@ float SynthVoice::processSample(double pitchHz, double currentMidiNote)
 
     const double loudness  = loudnessContour.processSample();
     const double filterEnv = filterContour.processSample();
-    const double filtered  = ladderFilter.processSample(dcFree, filterEnv, currentMidiNote);
+    // Declick gain captured before the filter, not just applied to the
+    // final output: a fresh voice previously fed the ladder filter's
+    // resonant feedback loop a full-amplitude step input from sample one,
+    // then only muted the *output* for ~2-3ms while that step rang inside
+    // the filter. The ring didn't stop when the mute ended — it kept
+    // sounding for up to ~1s afterward at high resonance. Ramping the
+    // filter's own input avoids exciting that ring in the first place.
+    const double declickGain = _startDeclickGain;
+    const double filtered  = ladderFilter.processSample(dcFree * declickGain, filterEnv, currentMidiNote);
     double amplified = vca.processSample(filtered, loudness);
     if (_startDeclickGain < 1.0) {
-        amplified *= _startDeclickGain;
+        amplified *= declickGain;
         _startDeclickGain = std::min(1.0, _startDeclickGain + _startDeclickStep);
     }
     if (_stealResidualSamplesRemaining > 0 && _stealResidualTotalSamples > 0) {

@@ -208,7 +208,17 @@ static void writeSnapshotRow(std::ofstream& f, const SnapshotPayload& p)
 void PolyTraceLogger::start()
 {
     // Runtime gate: require env var LADDERVOICE_POLY_TRACE=1
+    // getenv is deprecated in favour of _dupenv_s on MSVC, but this project
+    // builds with warnings-as-errors so it needs an explicit suppression
+    // rather than switching to the non-portable replacement.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#endif
     const char* envVal = std::getenv("LADDERVOICE_POLY_TRACE");
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
     if (!envVal || std::string(envVal) != "1")
         return;
 

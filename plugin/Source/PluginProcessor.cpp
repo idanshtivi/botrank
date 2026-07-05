@@ -234,6 +234,15 @@ void LadderVoiceAudioProcessor::releaseResources()
 #endif
 }
 
+void LadderVoiceAudioProcessor::reset()
+{
+    // SynthEngine::reset() clears all active/held voices, pitch bend, mod
+    // wheel, and sustain-pedal state (equivalent to a power-cycle) while
+    // re-applying the current parameter values, so the loaded patch itself
+    // is untouched — only realtime playback/MIDI state is cleared.
+    synth.reset();
+}
+
 bool LadderVoiceAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono()
@@ -331,22 +340,15 @@ void LadderVoiceAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         renderUntil(metadata.samplePosition);
 
         const auto message = metadata.getMessage();
-        if (message.isNoteOn()) {
 #if LADDERVOICE_ENABLE_POLY_TRACE
+        if (message.isNoteOn() || message.isNoteOff())
             _traceLastNoteSample = _traceSessionSample + static_cast<uint64_t>(currentSample);
 #endif
-            synth.noteOn(message.getNoteNumber(), message.getVelocity() * 127.0f);
-        } else if (message.isNoteOff()) {
-#if LADDERVOICE_ENABLE_POLY_TRACE
-            _traceLastNoteSample = _traceSessionSample + static_cast<uint64_t>(currentSample);
-#endif
-            synth.noteOff(message.getNoteNumber());
-        } else if (message.isPitchWheel()) {
-            const auto normalized = (static_cast<double>(message.getPitchWheelValue()) - 8192.0) / 8192.0;
-            synth.setPitchBend(normalized * pitchBendRange);
-        } else if (message.isController() && message.getControllerNumber() == 1) {
-            synth.setModWheel(message.getControllerValue() / 127.0);
-        }
+        // Single shared path for all MIDI (note on/off, pitch bend, mod
+        // wheel, sustain/all-notes-off/etc.) — SynthEngine::processMidi is
+        // the same, already-tested function used everywhere else, so there
+        // is exactly one place that decides what each MIDI message means.
+        synth.processMidi(message.getRawData(), message.getRawDataSize());
     }
 
     renderUntil(numSamples);
