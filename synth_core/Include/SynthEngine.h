@@ -167,6 +167,24 @@ public:
     void setPlayMode(int mode);
     void setModWheel(double position);
 
+    // Diagnostic-only: forwards to SynthVoice::setDebugBypassFilter on every
+    // voice (mono + poly). Investigation tooling for the poly-click probe;
+    // not reachable from any real parameter/UI path. No-op unless called.
+    void setDebugBypassFilter(bool bypass);
+
+    // Diagnostic-only, always available (not gated by LADDERVOICE_ENABLE_POLY_TRACE):
+    // read-only counts for the live real-time event log. Cheap (just scans
+    // the 4 poly voice slots), does not mutate any state.
+    void getVoiceCounts(int& active, int& held, int& releasing) const;
+    int  playModeForRtLog() const { return _playMode; }
+
+    // Diagnostic-only: current loudness-contour envelope value for a given
+    // poly voice slot (0..kPolyVoiceCount-1), or -1.0 if out of range. Used
+    // to directly inspect the envelope's own trajectory (value and slope)
+    // around a retrigger, independent of the audio-derived amplitude
+    // envelope which is contaminated by the oscillator's own waveform shape.
+    double getVoiceLoudnessValue(int voiceIndex) const;
+
     float processSample();
     // Fill stereo (interleaved L/R) output buffer – no heap allocation inside
     void processBlock(float* outputBuffer, int numFrames);
@@ -231,6 +249,14 @@ public:
     // Fill 4-element array with per-voice snapshot data for the crackle logger.
     // Safe to call from the audio thread only (reads mutable DSP state).
     void fillVoiceSnapshots(SnapshotPayload* out, uint32_t crackleIndex) const;
+
+    // Mono-voice diagnostic accessors — the poly trace instrumentation above
+    // only ever inspected _polyVoices, so a crackle produced by the mono
+    // voice (_playMode == 0) was invisible to it. Read-only, diagnostic-only.
+    int    playModeForTrace() const { return _playMode; }
+    bool   monoVoiceActiveForTrace() const { return _synthVoice.isActive(); }
+    double monoLoudnessValueForTrace() const { return _synthVoice.loudnessContour.getCurrentValue(); }
+    double monoFilterValueForTrace() const { return _synthVoice.filterContour.getCurrentValue(); }
 private:
 #endif
 };

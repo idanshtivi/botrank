@@ -32,6 +32,12 @@ private:
     double _value = 0.0;
     Stage _stage = Stage::Idle;
 
+    // While already in Sustain, ramp toward _sustainLevel over ~8ms instead
+    // of snapping to it every sample. A live knob turn still tracks fast
+    // enough to feel instant; a preset switch that changes the sustain
+    // level while a note is held no longer produces an output step/click.
+    double _sustainRampCoeff = 0.0;
+
     static double _clampTime(double seconds);
     double _stepFor(double seconds) const;
 };

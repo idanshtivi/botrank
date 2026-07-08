@@ -37,6 +37,39 @@ TEST(ContourGeneratorTest, AttackDecaySustainRelease)
     EXPECT_FALSE(env.isActive());
 }
 
+// Regression test: changing the sustain level while a note is already
+// sitting in the Sustain stage (e.g. a preset switch while a note is held)
+// must not produce an instant output step — that's an audible click.
+// Turning the sustain knob live should still track within a handful of
+// milliseconds, not lag noticeably.
+TEST(ContourGeneratorTest, SustainLevelChangeMidHoldRampsNotSnaps)
+{
+    ContourGenerator env;
+    env.setSampleRate(44100.0);
+    env.setAttackSeconds(0.001);
+    env.setDecaySeconds(0.001);
+    env.setSustainLevel(0.9);
+    env.setReleaseSeconds(0.2);
+    env.gateOn();
+
+    for (int i = 0; i < 200; ++i) env.processSample();
+    ASSERT_NEAR(env.getCurrentValue(), 0.9, 0.01) << "Precondition: must be settled in Sustain at 0.9";
+
+    // Simulate a preset switch changing the sustain level while still held.
+    env.setSustainLevel(0.1);
+    const double valueRightAfterChange = env.processSample();
+
+    // Must not jump straight to (or near) the new level in a single sample.
+    EXPECT_GT(valueRightAfterChange, 0.5)
+        << "Sustain level change while held snapped instantly instead of ramping "
+           "(valueRightAfterChange=" << valueRightAfterChange << ")";
+
+    // But it should settle at the new level within a short, bounded time.
+    for (int i = 0; i < 4410; ++i) env.processSample(); // 100ms
+    EXPECT_NEAR(env.getCurrentValue(), 0.1, 0.01)
+        << "Sustain level change never actually settles at the new value";
+}
+
 TEST(ContourGeneratorTest, ValuesClampAndRemainFinite)
 {
     ContourGenerator env;

@@ -19,6 +19,8 @@ double ContourGenerator::_stepFor(double seconds) const
 void ContourGenerator::setSampleRate(double sampleRate)
 {
     _sampleRate = (std::isfinite(sampleRate) && sampleRate > 1000.0) ? sampleRate : 44100.0;
+    constexpr double kSustainRampTau = 0.008; // 8ms — matches Mixer's level smoother
+    _sustainRampCoeff = std::exp(-1.0 / (kSustainRampTau * _sampleRate));
 }
 
 void ContourGenerator::setAttackSeconds(double seconds)
@@ -94,7 +96,7 @@ double ContourGenerator::processSample()
         }
         break;
     case Stage::Sustain:
-        _value = _sustainLevel;
+        _value = _sustainRampCoeff * _value + (1.0 - _sustainRampCoeff) * _sustainLevel;
         if (!_gateHigh) {
             _stage = Stage::Release;
         }

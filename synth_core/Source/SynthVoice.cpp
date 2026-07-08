@@ -21,37 +21,13 @@ void SynthVoice::prepare(double sampleRate, int /*blockSize*/)
     _startDeclickStep  = 1.0 / (0.002 * _sampleRate);
 }
 
-int SynthVoice::_fadeSamplesForMs(double ms) const
-{
-    return std::max(1, static_cast<int>(std::lround(_sampleRate * ms / 1000.0)));
-}
-
-void SynthVoice::_beginStolenReleaseRestart()
-{
-    _stealResidual = std::isfinite(_lastOutput) ? _lastOutput : 0.0;
-    _stealResidualTotalSamples = _fadeSamplesForMs(3.0);
-    _stealResidualSamplesRemaining = _stealResidualTotalSamples;
-
-    ladderFilter.reset();
-    loudnessContour.reset();
-    filterContour.reset();
-    vca.reset();
-    _dcBlockX = 0.0;
-    _dcBlockY = 0.0;
-    _pitchIsFirstSample = true;
-    _startDeclickGain = 0.0;
-    _startDeclickStep = 1.0 / static_cast<double>(_fadeSamplesForMs(3.0));
-}
-
-void SynthVoice::noteOn(int /*midiNote*/, float /*velocity*/, VoiceStartMode mode)
+void SynthVoice::noteOn(int /*midiNote*/, float /*velocity*/)
 {
     const bool wasActive = loudnessContour.isActive();
-    if (mode == VoiceStartMode::StolenRelease)
-        _beginStolenReleaseRestart();
 
     loudnessContour.gateOn();
     filterContour.gateOn();
-    if (mode == VoiceStartMode::Normal && !wasActive) {
+    if (!wasActive) {
         _startDeclickGain = 0.0;
         _startDeclickStep = 1.0 / (0.002 * _sampleRate);
     }
@@ -111,17 +87,13 @@ float SynthVoice::processSample(double pitchHz, double currentMidiNote)
     // sounding for up to ~1s afterward at high resonance. Ramping the
     // filter's own input avoids exciting that ring in the first place.
     const double declickGain = _startDeclickGain;
-    const double filtered  = ladderFilter.processSample(dcFree * declickGain, filterEnv, currentMidiNote);
+    const double filtered  = _debugBypassFilter
+        ? (dcFree * declickGain)
+        : ladderFilter.processSample(dcFree * declickGain, filterEnv, currentMidiNote);
     double amplified = vca.processSample(filtered, loudness);
     if (_startDeclickGain < 1.0) {
         amplified *= declickGain;
         _startDeclickGain = std::min(1.0, _startDeclickGain + _startDeclickStep);
-    }
-    if (_stealResidualSamplesRemaining > 0 && _stealResidualTotalSamples > 0) {
-        const double t = static_cast<double>(_stealResidualSamplesRemaining)
-                       / static_cast<double>(_stealResidualTotalSamples);
-        amplified += _stealResidual * t;
-        --_stealResidualSamplesRemaining;
     }
     if (!std::isfinite(amplified))
         amplified = 0.0;
@@ -150,9 +122,6 @@ void SynthVoice::reset()
     _startDeclickGain   = 1.0;
     _startDeclickStep   = 1.0 / (0.002 * _sampleRate);
     _lastOutput = 0.0;
-    _stealResidual = 0.0;
-    _stealResidualSamplesRemaining = 0;
-    _stealResidualTotalSamples = 0;
 }
 
 void SynthVoice::resetAudioChainState()

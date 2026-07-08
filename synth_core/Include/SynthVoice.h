@@ -8,11 +8,6 @@
 
 namespace SynthCore {
 
-enum class VoiceStartMode {
-    Normal,
-    StolenRelease
-};
-
 // Per-note signal chain: OscillatorBank → Mixer → LadderFilter → VCA.
 // Envelopes (loudness + filter contour) live here so they travel with the note.
 // Pitch is fed in each sample from the engine's VoiceController.
@@ -22,7 +17,12 @@ public:
     void prepare(double sampleRate, int blockSize);
 
     // Trigger/release envelopes. Pitch is controlled externally via processSample args.
-    void noteOn(int midiNote, float velocity, VoiceStartMode mode = VoiceStartMode::Normal);
+    // A voice reused mid-release (ReleaseTail/SameNote/Oldest reallocation)
+    // is retriggered exactly like one that's still held: gateOn() resumes
+    // the envelope from its current value rather than resetting state, so
+    // there is nothing to cross-fade -- oscillator phase, filter state, and
+    // envelope value all stay continuous across the retrigger.
+    void noteOn(int midiNote, float velocity);
     void noteOff();
 
     // Run one sample through the entire per-voice chain.
@@ -38,6 +38,13 @@ public:
 
     // Reset filter + DC-blocker state on a fresh note start (safe when VCA was 0).
     void resetAudioChainState();
+
+    // Diagnostic-only stage bypass for the poly-click investigation probe:
+    // when true, the ladder filter is skipped entirely (its output is not
+    // called at all) so the filter's contribution to a signal artifact can
+    // be isolated from the oscillator/mixer/drive stages. Defaults to false
+    // (no behavior change) and is not exposed to any real UI/parameter path.
+    void setDebugBypassFilter(bool bypass) { _debugBypassFilter = bypass; }
 
     // DSP sub-objects are public so SynthEngine can forward parameter changes
     // directly without a proliferation of proxy setters.
@@ -72,12 +79,8 @@ private:
     double _startDeclickStep = 1.0;
 
     double _lastOutput = 0.0;
-    double _stealResidual = 0.0;
-    int _stealResidualSamplesRemaining = 0;
-    int _stealResidualTotalSamples = 0;
 
-    int _fadeSamplesForMs(double ms) const;
-    void _beginStolenReleaseRestart();
+    bool _debugBypassFilter = false;
 
     static double _midiFromHz(double hz);
 };

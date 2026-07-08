@@ -102,6 +102,50 @@ namespace Fmt {
     }
 }
 
+#if JUCE_DEBUG
+// Non-modal — just a child Component overlaid on the editor, so it never
+// blocks interaction with the rest of the UI outside its own bounds.
+// Dismisses on click; shown once per application launch (see the static
+// flag at its call site), not once per editor open/close.
+class DebugBuildWarningBanner final : public juce::Component {
+public:
+    DebugBuildWarningBanner()
+    {
+        setInterceptsMouseClicks(true, false);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        g.setColour(juce::Colour(0xfffff3d0));
+        g.fillRoundedRectangle(bounds, 6.0f);
+        g.setColour(juce::Colour(0xffb8860b));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.5f);
+
+        auto textBounds = bounds.reduced(12.0f).toNearestInt();
+        g.setColour(juce::Colour(0xff3a2c10));
+        g.setFont(juce::Font(juce::FontOptions(13.0f, juce::Font::bold)));
+        g.drawText("Debug build detected.", textBounds.removeFromTop(18),
+                    juce::Justification::centredLeft);
+        g.setFont(juce::Font(juce::FontOptions(12.0f)));
+        g.drawText("Real-time audio performance is not representative.",
+                    textBounds.removeFromTop(16), juce::Justification::centredLeft);
+        g.drawText("Use Release for sound evaluation.",
+                    textBounds.removeFromTop(16), juce::Justification::centredLeft);
+
+        g.setColour(juce::Colour(0xff7a6a40));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("(click to dismiss)", getLocalBounds().removeFromBottom(14),
+                    juce::Justification::centred);
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        setVisible(false);
+    }
+};
+#endif
+
 void drawScrew(juce::Graphics& g, juce::Point<float> centre)
 {
     auto r = juce::Rectangle<float>(10.0f, 10.0f).withCentre(centre);
@@ -325,6 +369,21 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     // strip — bottom-row content now ends at y=604, so 642 gives the same
     // ~20px bottom margin every other column edge already gets.
     setSize(1520, 642);
+
+#if JUCE_DEBUG
+    // Once per application launch, not once per editor open/close (the
+    // editor is destroyed/recreated whenever the plugin window is
+    // reopened, e.g. after closing and reopening a DAW's plugin window).
+    static bool debugWarningShownThisRun = false;
+    if (!debugWarningShownThisRun) {
+        debugWarningShownThisRun = true;
+        auto banner = std::make_unique<DebugBuildWarningBanner>();
+        banner->setBounds(getWidth() - 300 - 12, 12, 300, 74);
+        addAndMakeVisible(*banner);
+        banner->toFront(false);
+        debugBuildWarning = std::move(banner);
+    }
+#endif
 }
 
 LadderVoiceAudioProcessorEditor::~LadderVoiceAudioProcessorEditor()

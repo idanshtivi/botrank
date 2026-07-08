@@ -1,4 +1,5 @@
 #include "../Include/SynthEngine.h"
+#include "../Include/RtEventLog.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -344,6 +345,29 @@ void SynthEngine::_releaseSustainedNotes()
     }
 }
 
+void SynthEngine::setDebugBypassFilter(bool bypass)
+{
+    _synthVoice.setDebugBypassFilter(bypass);
+    for (auto& voice : _polyVoices)
+        voice.setDebugBypassFilter(bypass);
+}
+
+double SynthEngine::getVoiceLoudnessValue(int voiceIndex) const
+{
+    if (voiceIndex < 0 || voiceIndex >= static_cast<int>(_polyVoices.size())) return -1.0;
+    return _polyVoices[static_cast<size_t>(voiceIndex)].loudnessContour.getCurrentValue();
+}
+
+void SynthEngine::getVoiceCounts(int& active, int& held, int& releasing) const
+{
+    active = 0; held = 0; releasing = 0;
+    for (size_t i = 0; i < _polyVoices.size(); ++i) {
+        const bool isActive = _polyVoices[i].isActive();
+        if (isActive) { ++active; if (!_polyHeld[i]) ++releasing; }
+        if (_polyHeld[i]) ++held;
+    }
+}
+
 void SynthEngine::setModWheel(double position)
 {
     _modWheelPosition = std::clamp(position, 0.0, 1.0);
@@ -382,8 +406,11 @@ void SynthEngine::noteOn(int midiNote, float velocity)
         _voiceCtrl.noteOn(midiNote, velocity);
         // In legato mode (no retrigger), keep envelopes running continuously.
         // Only call noteOn (which fires gateOn) when we actually want a retrigger.
-        if (!isLegato)
+        if (!isLegato) {
             _synthVoice.noteOn(midiNote, velocity);
+            RtEventLog::instance().log(RtEventType::EnvGateOn, 0, -1,
+                                        static_cast<int16_t>(midiNote));
+        }
 
         // Only randomize phases when the voice was truly silent.
         // Jumping phase while the envelope is non-zero creates an audible click;
@@ -394,6 +421,10 @@ void SynthEngine::noteOn(int midiNote, float velocity)
                 ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
             _synthVoice.oscillators.randomizePhases(seed);
             _synthVoice.resetAudioChainState();
+            RtEventLog::instance().log(RtEventType::VoiceReset, 0, -1,
+                                        static_cast<int16_t>(midiNote), 0,
+                                        RtAllocReason::NotApplicable,
+                                        static_cast<int16_t>(RtResetReason::PhaseRandomizeAndChainReset));
         } else if (!isLegato) {
             advanceRng(_noteStartRng); // keep RNG sequence consistent
         }
@@ -423,7 +454,25 @@ void SynthEngine::noteOn(int midiNote, float velocity)
     const size_t voiceSlot = static_cast<size_t>(voiceIndex);
     const bool wasHeld = _polyHeld[voiceSlot];
     const bool wasActive = _polyVoices[voiceSlot].isActive();
+#if LADDERVOICE_ENABLE_POLY_TRACE
     const bool isReleaseTailReuse = !wasHeld && wasActive;
+#endif
+
+    // Lightweight, always-on (runtime env-var gated) allocation-reason log —
+    // independent of PolyTraceLogger/LADDERVOICE_ENABLE_POLY_TRACE — for the
+    // live real-time click investigation.
+    {
+        const bool wasSameNote = wasHeld && (_polyMidiNotes[voiceSlot] == std::clamp(midiNote, 0, 127));
+        RtAllocReason reason;
+        if (wasSameNote)            reason = RtAllocReason::SameNote;
+        else if (!wasHeld && !wasActive) reason = RtAllocReason::FreeSlot;
+        else if (!wasHeld)         reason = RtAllocReason::ReleaseTail;
+        else                       reason = RtAllocReason::Oldest;
+        RtEventLog::instance().log(RtEventType::VoiceAlloc, 0, static_cast<int8_t>(voiceSlot),
+                                    static_cast<int16_t>(midiNote),
+                                    static_cast<uint8_t>(std::clamp(static_cast<int>(velocity), 0, 127)),
+                                    reason);
+    }
 
 #if LADDERVOICE_ENABLE_POLY_TRACE
     // Determine allocation reason from pre-alloc state
@@ -459,12 +508,18 @@ void SynthEngine::noteOn(int midiNote, float velocity)
             ^ (static_cast<uint32_t>(midiNote + 1) * 2246822519u);
         _polyVoices[voiceSlot].oscillators.randomizePhases(seed);
         _polyVoices[voiceSlot].resetAudioChainState();
+        RtEventLog::instance().log(RtEventType::VoiceReset, 0, static_cast<int8_t>(voiceSlot),
+                                    static_cast<int16_t>(midiNote), 0, RtAllocReason::NotApplicable,
+                                    static_cast<int16_t>(RtResetReason::PhaseRandomizeAndChainReset));
     }
 
-    _polyVoices[voiceSlot].noteOn(
-        midiNote,
-        velocity,
-        isReleaseTailReuse ? VoiceStartMode::StolenRelease : VoiceStartMode::Normal);
+    // ReleaseTail reuse is retriggered exactly like SameNote/Oldest reuse:
+    // gateOn() resumes the envelope from its current value with no state
+    // reset, so oscillator phase, filter state, and envelope value all stay
+    // continuous across the retrigger (see SynthVoice::noteOn).
+    _polyVoices[voiceSlot].noteOn(midiNote, velocity);
+    RtEventLog::instance().log(RtEventType::EnvGateOn, 0, static_cast<int8_t>(voiceSlot),
+                                static_cast<int16_t>(midiNote));
 
 #if LADDERVOICE_ENABLE_POLY_TRACE
     {
@@ -508,8 +563,11 @@ void SynthEngine::noteOff(int midiNote)
     if (_playMode == 0) {
         _voiceCtrl.noteOff(midiNote);
         _voiceCtrl.process();
-        if (!_voiceCtrl.isGateHigh())
+        if (!_voiceCtrl.isGateHigh()) {
             _synthVoice.noteOff();
+            RtEventLog::instance().log(RtEventType::EnvGateOff, 0, -1,
+                                        static_cast<int16_t>(midiNote));
+        }
         return;
     }
 
@@ -518,6 +576,8 @@ void SynthEngine::noteOff(int midiNote)
         if (_polyHeld[i] && _polyMidiNotes[i] == note) {
             _polyHeld[i] = false;
             _polyVoices[i].noteOff();
+            RtEventLog::instance().log(RtEventType::EnvGateOff, 0, static_cast<int8_t>(i),
+                                        static_cast<int16_t>(note));
 
 #if LADDERVOICE_ENABLE_POLY_TRACE
             {

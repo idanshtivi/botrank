@@ -46,6 +46,8 @@ add_library(SynthCoreLib STATIC
     Source/OutputStage.cpp
     Source/DSPUtils.cpp
     Source/PolyTraceLogger.cpp
+    Source/RtEventLog.cpp
+    Source/NoteOnAudioCapture.cpp
 )
 
 if(LADDERVOICE_ENABLE_POLY_TRACE)
@@ -86,6 +88,37 @@ add_executable(AudioSafetyCheck
 )
 target_link_libraries(AudioSafetyCheck PRIVATE SynthCoreLib)
 
+# ── Poly-click investigation probe (throwaway diagnostic tool) ──────────────
+add_executable(PolyClickProbe
+    Tools/poly_click_probe.cpp
+)
+target_link_libraries(PolyClickProbe PRIVATE SynthCoreLib)
+
+# ── Humanized-arpeggio A/B repro probe (throwaway diagnostic tool; does NOT
+# use PolyTraceLogger -- exercises the normal, non-trace signal path only) ──
+add_executable(HumanizedArpeggioProbe
+    Tools/humanized_arpeggio_probe.cpp
+)
+target_link_libraries(HumanizedArpeggioProbe PRIVATE SynthCoreLib)
+
+# ── Filter-contour/drive single-note click probe (throwaway diagnostic tool) ─
+add_executable(FilterContourClickProbe
+    Tools/filter_contour_click_probe.cpp
+)
+target_link_libraries(FilterContourClickProbe PRIVATE SynthCoreLib)
+
+# ── Same-note retrigger click probe (throwaway diagnostic tool) ─────────────
+add_executable(SameNoteRetriggerClickProbe
+    Tools/same_note_retrigger_click_probe.cpp
+)
+target_link_libraries(SameNoteRetriggerClickProbe PRIVATE SynthCoreLib)
+
+# ── Envelope slope-kink probe (throwaway diagnostic tool) ───────────────────
+add_executable(EnvelopeKinkProbe
+    Tools/envelope_kink_probe.cpp
+)
+target_link_libraries(EnvelopeKinkProbe PRIVATE SynthCoreLib)
+
 # ── Test executable ───────────────────────────────────────────────────────────
 if(SYNTH_CORE_BUILD_TESTS)
 add_executable(SynthCoreTests
@@ -116,7 +149,7 @@ endif()
 
 if(MINIMOOG_USE_TRUSTED_BIN)
     file(MAKE_DIRECTORY "${MINIMOOG_TRUSTED_BIN_DIR}")
-    set(trusted_bin_targets WavRender AudioSafetyCheck)
+    set(trusted_bin_targets WavRender AudioSafetyCheck PolyClickProbe)
     if(SYNTH_CORE_BUILD_TESTS)
         list(APPEND trusted_bin_targets SynthCoreTests)
     endif()

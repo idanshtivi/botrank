@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 namespace SynthCore {
 
@@ -24,7 +25,7 @@ namespace SynthCore {
 enum class AllocReason : uint8_t {
     SameNote    = 0,  // slot already playing this MIDI note
     FreeSlot    = 1,  // fully inactive (not held, not active)
-    ReleaseTail = 2,  // not held but still releasing (tail reuse — key click source)
+    ReleaseTail = 2,  // not held but still releasing (tail reuse)
     Oldest      = 3,  // forced steal of the oldest held voice
 };
 
@@ -132,10 +133,12 @@ struct CracklePayload {
     uint8_t  activeVoices;
     uint8_t  heldVoices;
     uint8_t  releasingVoices;
-    uint8_t  _pad;
+    uint8_t  playModeAtCrackle;   // 0=mono, 1=poly4 — which engine actually produced this sample
     uint64_t lastNoteEventSample;
     uint32_t droppedEvents;
-    uint32_t _pad2;
+    uint8_t  monoVoiceActive;    // _synthVoice.isActive() at crackle time (mono path is invisible to activeVoices above)
+    float    monoLoudnessValue;
+    float    monoFilterValue;
 };
 
 // ─── Union event (fixed 128 bytes, cache-line × 2 aligned) ───────────────────
@@ -170,6 +173,11 @@ public:
     bool isActive() const noexcept {
         return _active.load(std::memory_order_acquire);
     }
+
+    // Session directory (".tmp/live_poly_trace/<timestamp>"), set by start()
+    // on the same (non-audio) thread that calls it. Lets other diagnostic
+    // capture (e.g. a raw .wav dump) land next to the CSV trace files.
+    const std::string& sessionDirectory() const noexcept { return _sessionDirPublic; }
 
     // ── Current block context (set from audio thread before each block) ───────
     void setBlockContext(uint64_t blockIdx, uint64_t sessionSample,
@@ -312,6 +320,7 @@ private:
 
     struct Impl;
     Impl* _impl = nullptr;
+    std::string _sessionDirPublic;
 };
 
 } // namespace SynthCore

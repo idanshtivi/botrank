@@ -42,6 +42,10 @@ private:
     // Preset navigation — tracks index across factory + user combined list
     int currentPresetIndex = 0;
 
+#if JUCE_DEBUG
+    std::unique_ptr<juce::Component> debugBuildWarning;
+#endif
+
     void navigatePreset(int delta);
     void showPresetBrowser();
 

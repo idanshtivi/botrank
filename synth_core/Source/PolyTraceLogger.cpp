@@ -84,8 +84,9 @@ static void writeCrackleHeader(std::ofstream& f)
 {
     f << "sessionSample,blockIndex,sampleOffset,crackleIndex,"
          "maxDelta,prevSample,curSample,recentAvgDelta,"
-         "activeVoices,heldVoices,releasingVoices,"
-         "lastNoteEventSample,droppedEvents\n";
+         "activeVoices,heldVoices,releasingVoices,playModeAtCrackle,"
+         "lastNoteEventSample,droppedEvents,"
+         "monoVoiceActive,monoLoudnessValue,monoFilterValue\n";
 }
 static void writeSnapshotHeader(std::ofstream& f)
 {
@@ -180,8 +181,12 @@ static void writeCrackleRow(std::ofstream& f, const CracklePayload& p)
       << static_cast<int>(p.activeVoices)      << ','
       << static_cast<int>(p.heldVoices)        << ','
       << static_cast<int>(p.releasingVoices)   << ','
+      << static_cast<int>(p.playModeAtCrackle) << ','
       << p.lastNoteEventSample                 << ','
-      << p.droppedEvents                       << '\n';
+      << p.droppedEvents                       << ','
+      << static_cast<int>(p.monoVoiceActive)   << ','
+      << p.monoLoudnessValue                   << ','
+      << p.monoFilterValue                     << '\n';
 }
 
 static void writeSnapshotRow(std::ofstream& f, const SnapshotPayload& p)
@@ -232,6 +237,7 @@ void PolyTraceLogger::start()
     const std::string ts = timestampString();
     const std::string dir = std::string(".tmp/live_poly_trace/") + ts;
     _impl->sessionDir = dir;
+    _sessionDirPublic = dir;
 
     try {
         std::filesystem::create_directories(dir);
