@@ -31,6 +31,7 @@ public:
     void mouseMove(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
     // Ctrl+F focuses the search field (bubbles up from whichever child
     // currently has keyboard focus, e.g. the list box, if unhandled there).
@@ -74,6 +75,15 @@ private:
     // gap + divider line separating the shipped Factory taxonomy from
     // ad-hoc LAB preset-development folders.
     int firstLabTabIndex = -1;
+
+    // The sidebar's visible clip area (set in resized()) and how far its
+    // tab stack is scrolled up within that area — the LAB session-folder
+    // list can grow past the visible height, so the tabs need to scroll
+    // rather than just overflow invisibly.
+    juce::Rectangle<int> categorySidebarArea;
+    int categoryScrollOffset = 0;
+    int categoryContentHeight = 0;
+    void clampCategoryScrollOffset();
 
     int hoveredRow = -1; // for subtle hover highlight
 

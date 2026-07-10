@@ -478,13 +478,33 @@ void PresetBrowser::selectedRowsChanged(int /*lastRowSelected*/)
 
 // ─── Hover tracking ──────────────────────────────────────────────────────────
 
+void PresetBrowser::clampCategoryScrollOffset()
+{
+    const int maxScroll = juce::jmax(0, categoryContentHeight - categorySidebarArea.getHeight());
+    categoryScrollOffset = juce::jlimit(0, maxScroll, categoryScrollOffset);
+}
+
+void PresetBrowser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (!categorySidebarArea.contains(e.getPosition())) return;
+    const int maxScroll = juce::jmax(0, categoryContentHeight - categorySidebarArea.getHeight());
+    if (maxScroll <= 0) return;
+    constexpr float kPixelsPerNotch = 48.0f;
+    categoryScrollOffset = juce::jlimit(0, maxScroll,
+        categoryScrollOffset - juce::roundToInt(wheel.deltaY * kPixelsPerNotch));
+    resized();
+    repaint();
+}
+
 void PresetBrowser::mouseMove(const juce::MouseEvent& e)
 {
     if (e.eventComponent == this) {
         // Hovering the browser background — check the category sidebar.
         int newHover = -1;
-        for (int i = 0; i < (int)categoryTabRects.size(); ++i) {
-            if (categoryTabRects[(size_t)i].contains(e.getPosition())) { newHover = i; break; }
+        if (categorySidebarArea.contains(e.getPosition())) {
+            for (int i = 0; i < (int)categoryTabRects.size(); ++i) {
+                if (categoryTabRects[(size_t)i].contains(e.getPosition())) { newHover = i; break; }
+            }
         }
         if (newHover != hoveredCategoryIndex) {
             hoveredCategoryIndex = newHover;
@@ -521,6 +541,7 @@ void PresetBrowser::mouseExit(const juce::MouseEvent& e)
 void PresetBrowser::mouseUp(const juce::MouseEvent& e)
 {
     if (e.eventComponent != this) return;
+    if (!categorySidebarArea.contains(e.getPosition())) return;
     for (int i = 0; i < (int)categoryTabRects.size(); ++i) {
         if (categoryTabRects[(size_t)i].contains(e.getPosition())) {
             selectedCategory = categoryNames[i];
@@ -677,29 +698,53 @@ void PresetBrowser::paint(juce::Graphics& g)
 
     // Category sidebar — click a name to filter the list on the right to
     // just that sound type; "All" (and "User", if present) show everything
-    // in their respective scope.
-    for (int i = 0; i < categoryNames.size() && i < (int)categoryTabRects.size(); ++i) {
-        const auto r = categoryTabRects[(size_t)i].toFloat();
-        const bool isSelected = categoryNames[i] == selectedCategory;
-        if (isSelected) {
-            g.setColour(selBg.brighter(0.05f));
-            g.fillRoundedRectangle(r, 4.0f);
-            g.setColour(accentGold.withAlpha(0.85f));
-            g.fillRect(r.getX(), r.getY() + 2.0f, 3.0f, r.getHeight() - 4.0f);
-        } else if (i == hoveredCategoryIndex) {
-            g.setColour(hoverBg);
-            g.fillRoundedRectangle(r, 4.0f);
+    // in their respective scope. Clipped to its own area since the tab
+    // stack can be taller than the visible sidebar and scrolls internally.
+    {
+        juce::Graphics::ScopedSaveState sidebarClip(g);
+        g.reduceClipRegion(categorySidebarArea);
+        for (int i = 0; i < categoryNames.size() && i < (int)categoryTabRects.size(); ++i) {
+            const auto r = categoryTabRects[(size_t)i].toFloat();
+            if (!categorySidebarArea.toFloat().intersects(r)) continue;
+            const bool isSelected = categoryNames[i] == selectedCategory;
+            if (isSelected) {
+                g.setColour(selBg.brighter(0.05f));
+                g.fillRoundedRectangle(r, 4.0f);
+                g.setColour(accentGold.withAlpha(0.85f));
+                g.fillRect(r.getX(), r.getY() + 2.0f, 3.0f, r.getHeight() - 4.0f);
+            } else if (i == hoveredCategoryIndex) {
+                g.setColour(hoverBg);
+                g.fillRoundedRectangle(r, 4.0f);
+            }
+            // Resting tabs have no fill at all — they sit directly on the light
+            // cream panel background, not the dark list — so they need dark
+            // text, not the light cream used for selected/hover (which do have
+            // a dark fill behind them). Using a light colour here was reading
+            // as near-invisible white-on-cream.
+            const bool onDarkFill = isSelected || i == hoveredCategoryIndex;
+            g.setColour(onDarkFill ? textCream.brighter(isSelected ? 0.04f : 0.0f).withAlpha(isSelected ? 1.0f : 0.90f)
+                                   : juce::Colour(0xff2a2318).withAlpha(0.82f));
+            g.setFont(Typography::fitToWidth(Typography::popupEntry(), categoryNames[i], r.getWidth() - 20.0f));
+            g.drawText(categoryNames[i], r.reduced(14, 0).toNearestInt(), juce::Justification::centredLeft);
         }
-        // Resting tabs have no fill at all — they sit directly on the light
-        // cream panel background, not the dark list — so they need dark
-        // text, not the light cream used for selected/hover (which do have
-        // a dark fill behind them). Using a light colour here was reading
-        // as near-invisible white-on-cream.
-        const bool onDarkFill = isSelected || i == hoveredCategoryIndex;
-        g.setColour(onDarkFill ? textCream.brighter(isSelected ? 0.04f : 0.0f).withAlpha(isSelected ? 1.0f : 0.90f)
-                               : juce::Colour(0xff2a2318).withAlpha(0.82f));
-        g.setFont(Typography::fitToWidth(Typography::popupEntry(), categoryNames[i], r.getWidth() - 20.0f));
-        g.drawText(categoryNames[i], r.reduced(14, 0).toNearestInt(), juce::Justification::centredLeft);
+    }
+
+    // Faint edge fades hint that the sidebar has more content scrolled
+    // out of view above/below — the only visual cue since there's no
+    // scrollbar thumb on this hand-painted list.
+    const int maxCategoryScroll = juce::jmax(0, categoryContentHeight - categorySidebarArea.getHeight());
+    if (maxCategoryScroll > 0) {
+        auto fadeRect = categorySidebarArea.toFloat();
+        if (categoryScrollOffset > 0) {
+            g.setGradientFill(juce::ColourGradient(panelTop.withAlpha(0.95f), fadeRect.getX(), fadeRect.getY(),
+                                                    panelTop.withAlpha(0.0f), fadeRect.getX(), fadeRect.getY() + 10.0f, false));
+            g.fillRect(fadeRect.getX(), fadeRect.getY(), fadeRect.getWidth(), 10.0f);
+        }
+        if (categoryScrollOffset < maxCategoryScroll) {
+            g.setGradientFill(juce::ColourGradient(panel.withAlpha(0.0f), fadeRect.getX(), fadeRect.getBottom() - 10.0f,
+                                                    panel.withAlpha(0.95f), fadeRect.getX(), fadeRect.getBottom(), false));
+            g.fillRect(fadeRect.getX(), fadeRect.getBottom() - 10.0f, fadeRect.getWidth(), 10.0f);
+        }
     }
 
     // Divider between the Factory sound-type tabs and the LAB session-folder
@@ -735,10 +780,22 @@ void PresetBrowser::resized()
     auto sidebar = area.removeFromLeft(128);
     area.removeFromLeft(10); // gap + divider line drawn in paint()
 
-    categoryTabRects.clear();
+    categorySidebarArea = sidebar;
+
+    // First pass at offset 0 to measure the unscrolled stack height, then
+    // clamp the scroll offset against it before laying out the real rects.
     constexpr int tabH = 25;
     constexpr int tabGap = 2;
-    int y = sidebar.getY();
+    int measuredY = sidebar.getY();
+    for (int i = 0; i < categoryNames.size(); ++i) {
+        if (i == firstLabTabIndex) measuredY += 10;
+        measuredY += tabH + tabGap;
+    }
+    categoryContentHeight = measuredY - sidebar.getY();
+    clampCategoryScrollOffset();
+
+    categoryTabRects.clear();
+    int y = sidebar.getY() - categoryScrollOffset;
     for (int i = 0; i < categoryNames.size(); ++i) {
         if (i == firstLabTabIndex)
             y += 10; // extra gap separating Factory tabs from LAB session folders

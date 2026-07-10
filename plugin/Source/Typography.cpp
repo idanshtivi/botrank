@@ -1,4 +1,6 @@
 #include "Typography.h"
+#include <map>
+#include <tuple>
 
 #if LADDERVOICE_HAS_EMBEDDED_FONTS
  #include "FontBinaryData.h"
@@ -149,11 +151,8 @@ float measuredWidth (const juce::Font& font, const juce::String& text)
     return ga.getBoundingBox (0, -1, false).getWidth();
 }
 
-juce::Font fitToWidth (const juce::Font& base, const juce::String& text, float maxWidth)
+static juce::Font fitToWidthUncached (const juce::Font& base, const juce::String& text, float maxWidth)
 {
-    if (text.isEmpty() || maxWidth <= 0.0f)
-        return base;
-
     if (measuredWidth (base, text) <= maxWidth)
         return base;
 
@@ -184,6 +183,38 @@ juce::Font fitToWidth (const juce::Font& base, const juce::String& text, float m
     }
 
     return tight.withPointHeight (minPoints);
+}
+
+juce::Font fitToWidth (const juce::Font& base, const juce::String& text, float maxWidth)
+{
+    if (text.isEmpty() || maxWidth <= 0.0f)
+        return base;
+
+    // fitToWidth's search loop measures text with GlyphArrangement up to ~100
+    // times when it doesn't fit at the base size. It's called from
+    // paintListBoxItem on every repaint, and list hover repaints rows on
+    // every mouse-move pixel — without caching, that turns hovering a preset
+    // list into dozens of these expensive searches per second, which reads
+    // as sticky/laggy mouse tracking rather than a sustained CPU spike.
+    struct Key {
+        juce::String text, typeface;
+        float maxWidth, pointHeight, tracking;
+        bool bold, italic;
+        bool operator< (const Key& o) const {
+            return std::tie (text, typeface, maxWidth, pointHeight, tracking, bold, italic)
+                 < std::tie (o.text, o.typeface, o.maxWidth, o.pointHeight, o.tracking, o.bold, o.italic);
+        }
+    };
+    static std::map<Key, juce::Font> cache;
+
+    const Key key { text, base.getTypefaceName(), maxWidth, base.getHeightInPoints(),
+                    base.getExtraKerningFactor(), base.isBold(), base.isItalic() };
+    if (auto it = cache.find (key); it != cache.end())
+        return it->second;
+
+    auto result = fitToWidthUncached (base, text, maxWidth);
+    cache[key] = result;
+    return result;
 }
 
 juce::Font mainTitle()         { return trackedFont (Family::Title, Weight::Bold,     37.0f, -0.030f); }
