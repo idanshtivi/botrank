@@ -141,7 +141,7 @@ void PresetBrowser::rebuildCategoryTabs()
     // "Bass" shows up in the Bass tab right alongside factory Bass presets,
     // not in a separate opaque bucket.
     static const juce::StringArray kPreferredOrder {
-        "Bass", "Lead", "Pad", "Keys", "Brass", "Pluck", "Cinematic", "Performance", "FX", "User"
+        "Bass", "Lead", "Pad", "Keys", "Brass", "Strings", "Pluck", "Cinematic", "FX", "User"
     };
 
     auto& mgr = processor.presetManager;
@@ -359,13 +359,11 @@ void PresetBrowser::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 
 void PresetBrowser::saveAs()
 {
-    // Same 8 factory sound-type categories offered everywhere else in the
+    // Same factory sound-type categories offered everywhere else in the
     // browser, plus "User" (the default) first since it's the most common
     // choice for a quick save.
     static const juce::StringArray kSaveCategories {
-        "User", "Bass", "Lead", "Pad", "Keys", "Brass", "Cinematic", "Performance", "FX",
-        "LAB - Mid Bass Exploration 01", "LAB - Leads Exploration 01", "LAB - Plucks Exploration 01",
-        "LAB - Keys Exploration 01", "LAB - FX Exploration 01", "LAB - Experimental 01"
+        "User", "Bass", "Lead", "Pad", "Keys", "Brass", "Strings", "Cinematic", "FX"
     };
 
     auto* alertWindow = new juce::AlertWindow("Save Preset",
@@ -438,11 +436,24 @@ void PresetBrowser::deleteSelected()
     const int row = listBox.getSelectedRow();
     if (row < 0 || row >= (int)entries.size()) return;
     auto& e = entries[(size_t)row];
-    if (!e.isUser || e.sourceIndex < 0) return;
+    if (e.sourceIndex < 0) return;
 
-    auto confirmCb = [this, name = e.name, userIdx = e.sourceIndex](int result) {
+    // Factory (embedded) presets can't be removed from disk — they're
+    // compiled into the binary — so deleting one instead hides it from
+    // this local install's browser permanently (see
+    // PresetManager::hideFactoryPreset). A fresh install of the plugin
+    // still ships with the full library.
+    const bool isUser = e.isUser;
+    const juce::String category = isUser
+        ? juce::String()
+        : processor.presetManager.getFactoryPreset(e.sourceIndex).category;
+
+    auto confirmCb = [this, name = e.name, category, isUser, srcIdx = e.sourceIndex](int result) {
         if (result == 1) {
-            processor.presetManager.deleteUserPreset(userIdx);
+            if (isUser)
+                processor.presetManager.deleteUserPreset(srcIdx);
+            else
+                processor.presetManager.hideFactoryPreset(name, category);
             if (processor.presetManager.getCurrentPresetName() == name)
                 processor.presetManager.setCurrentPresetName("Init");
             rebuildEntries();
@@ -566,10 +577,11 @@ void PresetBrowser::renameSelected()
     const int row = listBox.getSelectedRow();
     if (row < 0 || row >= (int)entries.size()) return;
     const auto& e = entries[(size_t)row];
-    if (!e.isUser || e.sourceIndex < 0) return;
+    if (e.sourceIndex < 0) return;
 
     const bool wasCurrent = processor.presetManager.getCurrentPresetName().equalsIgnoreCase(e.name);
-    const int userIdx = e.sourceIndex;
+    const int srcIdx = e.sourceIndex;
+    const bool isUser = e.isUser;
 
     auto* alertWindow = new juce::AlertWindow("Rename Preset",
                                               "Enter a new name:",
@@ -579,7 +591,7 @@ void PresetBrowser::renameSelected()
     alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
     alertWindow->enterModalState(true, juce::ModalCallbackFunction::create(
-        [this, alertWindow, userIdx, wasCurrent](int result) {
+        [this, alertWindow, srcIdx, isUser, wasCurrent](int result) {
             std::unique_ptr<juce::AlertWindow> aw(alertWindow); // deleted on every return path
             if (result != 1) return;
 
@@ -589,7 +601,13 @@ void PresetBrowser::renameSelected()
                     "Rename Preset", "Please enter a name.");
                 return;
             }
-            if (!processor.presetManager.renameUserPreset(userIdx, newName)) {
+            // Factory (embedded) presets are renamed via a persisted local
+            // override — see PresetManager::renameFactoryPreset() — since
+            // the shipped binary itself can't be edited.
+            const bool ok = isUser
+                ? processor.presetManager.renameUserPreset(srcIdx, newName)
+                : processor.presetManager.renameFactoryPreset(srcIdx, newName);
+            if (!ok) {
                 juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
                     "Rename Preset", "A preset with that name already exists in this category.");
                 return;
@@ -737,12 +755,14 @@ void PresetBrowser::importPresetFolder()
 void PresetBrowser::updateActionButtonsState()
 {
     const int row = listBox.getSelectedRow();
-    const bool isUserRowSelected = row >= 0
+    const bool validRowSelected = row >= 0
         && row < (int)entries.size()
-        && entries[(size_t)row].isUser
         && entries[(size_t)row].sourceIndex >= 0;
-    deleteBtn.setEnabled(isUserRowSelected);
-    renameBtn.setEnabled(isUserRowSelected);
+    // Both Delete and Rename now work on Factory rows too — Factory deletes
+    // hide the preset locally (see deleteSelected()) and Factory renames
+    // persist a local override (see renameSelected()).
+    deleteBtn.setEnabled(validRowSelected);
+    renameBtn.setEnabled(validRowSelected);
 }
 
 void PresetBrowser::selectedRowsChanged(int /*lastRowSelected*/)

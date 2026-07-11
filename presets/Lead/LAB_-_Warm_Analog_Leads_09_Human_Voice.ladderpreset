@@ -1,4 +1,4 @@
-<LadderVoicePreset name="Human Voice (Warm)" category="Lead" version="1">
+<LadderVoicePreset name="Human Whisper" category="Lead" version="1">
   <PARAM id="playMode" value="0"/>
   <PARAM id="osc1Enabled" value="1"/>
   <PARAM id="osc2Enabled" value="1"/>

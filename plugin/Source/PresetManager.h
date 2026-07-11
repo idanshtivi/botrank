@@ -5,6 +5,12 @@ struct PresetData {
     juce::String name;
     juce::String category;
     std::vector<std::pair<juce::String, float>> params;
+    // Snapshot of `name` as originally built/embedded, taken once at
+    // startup before any rename override is applied — stays fixed across
+    // however many times the preset gets renamed in-app, so the persisted
+    // rename record always has a stable key to update in place rather than
+    // growing a rename chain. Not used for anything except that lookup.
+    juce::String originalName;
 };
 
 class PresetManager {
@@ -13,6 +19,21 @@ public:
 
     int getNumFactoryPresets() const { return (int)factoryPresets.size(); }
     const PresetData& getFactoryPreset(int i) const { return factoryPresets[(size_t)i]; }
+
+    // Removes a factory (compiled-into-the-binary) preset from the live
+    // list immediately and persists the hide across restarts — same
+    // pattern as hideLabFolder(), just at individual-preset granularity.
+    // Does not touch the shipped binary: a fresh install of the plugin
+    // always has the full library; only this local install remembers the
+    // hide. Returns false if no matching factory preset was found.
+    bool hideFactoryPreset(const juce::String& name, const juce::String& category);
+
+    // Renames a factory (compiled-into-the-binary) preset in place and
+    // persists it across restarts — same idea as hideFactoryPreset(), just
+    // changing the name instead of removing it. Fails without changing
+    // anything if index is out of range or newName collides with another
+    // preset (factory or user) already in the same category.
+    bool renameFactoryPreset(int index, const juce::String& newName);
 
     juce::File getUserPresetFolder() const;
     void refreshUserPresets();
@@ -111,6 +132,16 @@ private:
     int currentPresetIndex = 0;
 
     void buildFactoryPresets();
+    // Removes any factory preset previously hidden via hideFactoryPreset()
+    // (persisted to hidden_factory_presets.txt) from the in-memory list.
+    // Called once at startup, after every factory preset (hand-written and
+    // embedded) has been loaded.
+    void applyHiddenFactoryPresetsFilter();
+    // Applies any persisted factory-preset renames (from
+    // factory_preset_renames.txt) to the in-memory list. Called once at
+    // startup, after originalName has been snapshotted for every entry and
+    // before applyHiddenFactoryPresetsFilter() runs.
+    void applyFactoryPresetRenames();
     // Appends every embedded .ladderpreset resource (compiled into the binary
     // from the top-level presets/ tree — see plugin/CMakeLists.txt) to
     // factoryPresets, right after the hand-written ones built by

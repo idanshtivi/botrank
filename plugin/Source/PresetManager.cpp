@@ -1,10 +1,19 @@
 #include "PresetManager.h"
+#include <algorithm>
 
 #if LADDERVOICE_HAS_EMBEDDED_PRESETS
 #include "PresetBinaryData.h"
 #endif
 
 namespace {
+// Composite key for the hidden-factory-presets file — name and category
+// together, since the same preset name could theoretically exist in two
+// different categories and only one should be hidden.
+juce::String factoryPresetHideKey(const juce::String& name, const juce::String& category)
+{
+    return category + " ||| " + name;
+}
+
 // All APVTS parameter IDs used in presets
 static const char* const kAllParamIds[] = {
     "playMode", "osc1Enabled", "osc2Enabled", "osc3Enabled",
@@ -76,6 +85,114 @@ PresetManager::PresetManager()
 {
     buildFactoryPresets();
     loadEmbeddedFactoryPresets();
+    for (auto& p : factoryPresets) p.originalName = p.name;
+    applyFactoryPresetRenames();
+    applyHiddenFactoryPresetsFilter();
+}
+
+void PresetManager::applyFactoryPresetRenames()
+{
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("factory_preset_renames.txt");
+    if (!file.existsAsFile()) return;
+    auto lines = juce::StringArray::fromLines(file.loadFileAsString());
+    lines.removeEmptyStrings();
+
+    for (auto& line : lines) {
+        const int firstSep = line.indexOf(" ||| ");
+        if (firstSep < 0) continue;
+        const auto category = line.substring(0, firstSep);
+        const auto rest = line.substring(firstSep + 5);
+        const int secondSep = rest.indexOf(" ||| ");
+        if (secondSep < 0) continue;
+        const auto originalName = rest.substring(0, secondSep);
+        const auto newName = rest.substring(secondSep + 5);
+        for (auto& p : factoryPresets) {
+            if (p.category == category && p.originalName == originalName) {
+                p.name = newName;
+                break;
+            }
+        }
+    }
+}
+
+bool PresetManager::renameFactoryPreset(int index, const juce::String& newName)
+{
+    if (index < 0 || index >= (int)factoryPresets.size() || newName.isEmpty()) return false;
+    auto& target = factoryPresets[(size_t)index];
+
+    for (int i = 0; i < (int)factoryPresets.size(); ++i)
+        if (i != index && factoryPresets[(size_t)i].category == target.category
+            && factoryPresets[(size_t)i].name.equalsIgnoreCase(newName))
+            return false;
+    for (int i = 0; i < (int)userPresetFiles.size(); ++i)
+        if (getUserPresetCategory(i) == target.category
+            && getUserPresetName(i).equalsIgnoreCase(newName))
+            return false;
+
+    target.name = newName;
+
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("factory_preset_renames.txt");
+    file.getParentDirectory().createDirectory();
+    juce::StringArray lines;
+    if (file.existsAsFile()) {
+        lines = juce::StringArray::fromLines(file.loadFileAsString());
+        lines.removeEmptyStrings();
+    }
+    const auto keyPrefix = target.category + " ||| " + target.originalName + " ||| ";
+    bool updated = false;
+    for (auto& line : lines) {
+        if (line.startsWith(keyPrefix)) {
+            line = keyPrefix + newName;
+            updated = true;
+            break;
+        }
+    }
+    if (!updated)
+        lines.add(keyPrefix + newName);
+    file.replaceWithText(lines.joinIntoString("\n"));
+    return true;
+}
+
+void PresetManager::applyHiddenFactoryPresetsFilter()
+{
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("hidden_factory_presets.txt");
+    if (!file.existsAsFile()) return;
+    auto hidden = juce::StringArray::fromLines(file.loadFileAsString());
+    hidden.removeEmptyStrings();
+    if (hidden.isEmpty()) return;
+
+    factoryPresets.erase(
+        std::remove_if(factoryPresets.begin(), factoryPresets.end(),
+            [&hidden](const PresetData& p) {
+                return hidden.contains(factoryPresetHideKey(p.name, p.category));
+            }),
+        factoryPresets.end());
+}
+
+bool PresetManager::hideFactoryPreset(const juce::String& name, const juce::String& category)
+{
+    bool removed = false;
+    for (auto it = factoryPresets.begin(); it != factoryPresets.end(); ++it) {
+        if (it->name == name && it->category == category) {
+            factoryPresets.erase(it);
+            removed = true;
+            break;
+        }
+    }
+    if (!removed) return false;
+
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("hidden_factory_presets.txt");
+    file.getParentDirectory().createDirectory();
+    juce::StringArray hidden;
+    if (file.existsAsFile()) {
+        hidden = juce::StringArray::fromLines(file.loadFileAsString());
+        hidden.removeEmptyStrings();
+    }
+    const auto key = factoryPresetHideKey(name, category);
+    if (!hidden.contains(key))
+        hidden.add(key);
+    file.replaceWithText(hidden.joinIntoString("\n"));
+    return true;
 }
 
 void PresetManager::loadEmbeddedFactoryPresets()
@@ -338,131 +455,6 @@ void PresetManager::buildFactoryPresets()
         {"filterAttack", 0.01f}, {"filterDecay", 0.25f}, {"filterSustain", 0.55f}, {"filterRelease", 0.22f},
         {"filterKeyboardTracking", 2.0f},
         {"loudnessAttack", 0.01f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
-        {"masterVolume", 0.55f},
-    })});
-
-    // ══════════════════════════════════════════════════════════════════════
-    // PERFORMANCE (10) — glide, unison, mod-wheel expression, and other
-    // live-playable techniques front and center.
-    // ══════════════════════════════════════════════════════════════════════
-
-    factoryPresets.push_back({"Expressive Slide Lead", "Performance", makePreset({
-        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.07f},
-        {"mixerDrive", 1.1f},
-        {"filterCutoff", 5200.0f}, {"filterResonance", 0.22f}, {"filterContour", 0.15f},
-        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.65f}, {"filterRelease", 0.24f},
-        {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.008f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.22f},
-        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.14f},
-        {"pitchBendRange", 2.0f}, {"masterVolume", 0.58f},
-    })});
-
-    factoryPresets.push_back({"Funk Clav Performance", "Performance", makePreset({
-        {"playMode", 1.0f},
-        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.80f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 4}, {"osc2Level", 0.40f},
-        {"mixerDrive", 1.3f},
-        {"filterCutoff", 3600.0f}, {"filterResonance", 0.32f}, {"filterContour", 0.60f},
-        {"filterAttack", 0.002f}, {"filterDecay", 0.18f}, {"filterSustain", 0.10f}, {"filterRelease", 0.12f},
-        {"filterKeyboardTracking", 1.0f},
-        {"loudnessAttack", 0.002f}, {"loudnessDecay", 0.20f}, {"loudnessSustain", 0.15f}, {"loudnessRelease", 0.12f},
-        {"masterVolume", 0.58f},
-    })});
-
-    factoryPresets.push_back({"Wheel Vibrato Lead", "Performance", makePreset({
-        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.05f},
-        {"mixerDrive", 1.1f},
-        {"filterCutoff", 6000.0f}, {"filterResonance", 0.22f}, {"filterContour", 0.15f},
-        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.68f}, {"filterRelease", 0.24f},
-        {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.008f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.22f},
-        {"lfoRate", 5.5f}, {"lfoAmount", 0.0f}, {"lfoDestination", 0.0f}, {"modWheelAmount", 0.35f},
-        {"masterVolume", 0.58f},
-    })});
-
-    factoryPresets.push_back({"Unison Glide Solo", "Performance", makePreset({
-        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.65f}, {"osc2Detune", 0.16f},
-        {"mixerDrive", 1.3f},
-        {"filterCutoff", 5600.0f}, {"filterResonance", 0.25f}, {"filterContour", 0.16f},
-        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.65f}, {"filterRelease", 0.25f},
-        {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.007f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.22f},
-        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.10f},
-        {"pitchBendRange", 5.0f}, {"masterVolume", 0.55f},
-    })});
-
-    factoryPresets.push_back({"Talking Filter Lead", "Performance", makePreset({
-        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.04f},
-        {"mixerDrive", 1.1f},
-        {"filterCutoff", 2200.0f}, {"filterResonance", 0.35f}, {"filterContour", 0.20f},
-        {"filterAttack", 0.006f}, {"filterDecay", 0.30f}, {"filterSustain", 0.60f}, {"filterRelease", 0.22f},
-        {"filterKeyboardTracking", 1.0f},
-        {"loudnessAttack", 0.007f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
-        {"lfoRate", 4.0f}, {"lfoAmount", 0.0f}, {"lfoDestination", 1.0f}, {"modWheelAmount", 0.5f},
-        {"masterVolume", 0.58f},
-    })});
-
-    factoryPresets.push_back({"Legato Slide Bass", "Performance", makePreset({
-        {"osc1Waveform", 2}, {"osc1Range", 2}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 2}, {"osc2Level", 0.40f}, {"osc2Detune", 0.05f},
-        {"mixerDrive", 1.3f},
-        {"filterCutoff", 500.0f}, {"filterResonance", 0.18f}, {"filterContour", 0.30f},
-        {"filterAttack", 0.004f}, {"filterDecay", 0.35f}, {"filterSustain", 0.25f}, {"filterRelease", 0.18f},
-        {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.30f}, {"loudnessSustain", 0.35f}, {"loudnessRelease", 0.16f},
-        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.07f},
-        {"masterVolume", 0.60f},
-    })});
-
-    factoryPresets.push_back({"Pitch Bend Screamer", "Performance", makePreset({
-        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 4}, {"osc2Level", 0.35f}, {"osc2Detune", 0.08f},
-        {"mixerDrive", 1.6f},
-        {"filterCutoff", 5000.0f}, {"filterResonance", 0.45f}, {"filterContour", 0.25f},
-        {"filterAttack", 0.004f}, {"filterDecay", 0.30f}, {"filterSustain", 0.55f}, {"filterRelease", 0.22f},
-        {"filterDrive", 0.80f}, {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.005f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
-        {"pitchBendRange", 12.0f}, {"masterVolume", 0.53f},
-    })});
-
-    factoryPresets.push_back({"Smooth Portamento Solo", "Performance", makePreset({
-        {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.90f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 1}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.03f},
-        {"mixerDrive", 0.80f},
-        {"filterCutoff", 4000.0f}, {"filterResonance", 0.14f}, {"filterContour", 0.10f},
-        {"filterAttack", 0.02f}, {"filterDecay", 0.28f}, {"filterSustain", 0.75f}, {"filterRelease", 0.30f},
-        {"filterKeyboardTracking", 1.0f},
-        {"loudnessAttack", 0.02f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.30f},
-        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.20f},
-        {"masterVolume", 0.60f},
-    })});
-
-    factoryPresets.push_back({"Analog Ribbon Lead", "Performance", makePreset({
-        {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f},
-        {"mixerDrive", 1.0f},
-        {"filterCutoff", 5500.0f}, {"filterResonance", 0.20f}, {"filterContour", 0.14f},
-        {"filterAttack", 0.005f}, {"filterDecay", 0.28f}, {"filterSustain", 0.68f}, {"filterRelease", 0.22f},
-        {"filterKeyboardTracking", 2.0f},
-        {"loudnessAttack", 0.006f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.20f},
-        {"legato", 1.0f}, {"retrigger", 0.0f}, {"glideEnabled", 1.0f}, {"glideTime", 0.05f},
-        {"pitchBendRange", 3.0f}, {"masterVolume", 0.58f},
-    })});
-
-    factoryPresets.push_back({"Dynamic Brass Performance", "Performance", makePreset({
-        {"playMode", 1.0f},
-        {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.75f},
-        {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.45f}, {"osc2Detune", 0.05f},
-        {"mixerDrive", 1.1f},
-        {"filterCutoff", 2500.0f}, {"filterResonance", 0.20f}, {"filterContour", 0.50f},
-        {"filterAttack", 0.05f}, {"filterDecay", 0.28f}, {"filterSustain", 0.65f}, {"filterRelease", 0.30f},
-        {"filterKeyboardTracking", 1.0f},
-        {"loudnessAttack", 0.03f}, {"loudnessDecay", 0.0f}, {"loudnessSustain", 1.0f}, {"loudnessRelease", 0.28f},
-        {"lfoRate", 3.0f}, {"lfoAmount", 0.0f}, {"lfoDestination", 1.0f}, {"modWheelAmount", 0.30f},
         {"masterVolume", 0.55f},
     })});
 
@@ -1168,7 +1160,7 @@ void PresetManager::buildFactoryPresets()
     // (dropped in the Bold version, where the buzz should dominate
     // unobstructed), backed pulse width off the lab's near-limit 0.12 for
     // A/B (kept for C), and tuned drive/output per version.
-    factoryPresets.push_back({"Clash Whisper (A)", "Bass", makePreset({
+    factoryPresets.push_back({"Clash Whisper", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.75f}, {"osc1PulseWidth", 0.35f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.03f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.20f}, {"osc3KeyboardTracking", 1.0f},
@@ -1179,7 +1171,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Clash Core (B)", "Bass", makePreset({
+    factoryPresets.push_back({"Clash Core", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.78f}, {"osc1PulseWidth", 0.20f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.48f}, {"osc2Detune", 0.04f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.18f}, {"osc3KeyboardTracking", 1.0f},
@@ -1190,7 +1182,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.58f},
     })});
-    factoryPresets.push_back({"Clash Extreme (C)", "Bass", makePreset({
+    factoryPresets.push_back({"Clash Extreme", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.80f}, {"osc1PulseWidth", 0.14f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.55f}, {"osc2Detune", 0.05f},
         {"mixerDrive", 1.4f},
@@ -1209,7 +1201,7 @@ void PresetManager::buildFactoryPresets()
     // unison read as slightly sterile/phase-locked), and scaled contour
     // with resonance so the Bold version's peak is actively "ridden" by
     // the envelope rather than just sitting static.
-    factoryPresets.push_back({"Resonant Warmth (A)", "Bass", makePreset({
+    factoryPresets.push_back({"Resonant Warmth", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.03f},
         {"mixerDrive", 0.9f},
@@ -1219,7 +1211,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.15f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Resonant Edge (B)", "Bass", makePreset({
+    factoryPresets.push_back({"Resonant Edge", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f},
         {"mixerDrive", 1.0f},
@@ -1229,7 +1221,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.22f}, {"loudnessRelease", 0.15f},
         {"masterVolume", 0.56f},
     })});
-    factoryPresets.push_back({"Resonant Scream (C)", "Bass", makePreset({
+    factoryPresets.push_back({"Resonant Scream", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.05f},
         {"mixerDrive", 1.1f},
@@ -1245,7 +1237,7 @@ void PresetManager::buildFactoryPresets()
     // already musical -- the "extreme" here is purity, not harshness, so
     // refinement is about envelope playability and giving three genuinely
     // different intensities rather than fixing anything broken.
-    factoryPresets.push_back({"Vintage Whisper (A)", "Bass", makePreset({
+    factoryPresets.push_back({"Vintage Whisper", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.75f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.02f},
         {"mixerDrive", 0.25f},
@@ -1255,7 +1247,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.04f}, {"loudnessDecay", 0.40f}, {"loudnessSustain", 0.50f}, {"loudnessRelease", 0.30f},
         {"masterVolume", 0.62f},
     })});
-    factoryPresets.push_back({"Vintage Warmth (B)", "Bass", makePreset({
+    factoryPresets.push_back({"Vintage Warmth", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.03f},
         {"mixerDrive", 0.35f},
@@ -1265,7 +1257,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.012f}, {"loudnessDecay", 0.34f}, {"loudnessSustain", 0.45f}, {"loudnessRelease", 0.22f},
         {"masterVolume", 0.62f},
     })});
-    factoryPresets.push_back({"Vintage Push (C)", "Bass", makePreset({
+    factoryPresets.push_back({"Vintage Push", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.38f}, {"osc2Detune", 0.03f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.18f}, {"osc3KeyboardTracking", 1.0f},
@@ -1282,7 +1274,7 @@ void PresetManager::buildFactoryPresets()
     // Narrow+RevSaw, aimed at a nasal/reedy character rather than Clash's
     // buzzy edge. Production changes mirror Clash's: pulse width backed
     // off the lab extreme for A/B, drive/output balanced per version.
-    factoryPresets.push_back({"Reed Whisper (A)", "Bass", makePreset({
+    factoryPresets.push_back({"Reed Whisper", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.75f}, {"osc1PulseWidth", 0.35f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.30f},
         {"mixerDrive", 0.8f},
@@ -1292,7 +1284,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.28f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Reed Core (B)", "Bass", makePreset({
+    factoryPresets.push_back({"Reed Core", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.78f}, {"osc1PulseWidth", 0.22f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.35f},
         {"mixerDrive", 1.0f},
@@ -1302,7 +1294,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.57f},
     })});
-    factoryPresets.push_back({"Reed Scream (C)", "Bass", makePreset({
+    factoryPresets.push_back({"Reed Scream", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.80f}, {"osc1PulseWidth", 0.14f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.42f},
         {"mixerDrive", 1.3f},
@@ -1319,7 +1311,7 @@ void PresetManager::buildFactoryPresets()
     // inherently subtle, A/B/C vary the drift AMOUNT itself (not just the
     // surrounding patch) so the three versions are genuinely different in
     // how audible the "aliveness" is, not just louder/darker.
-    factoryPresets.push_back({"Subtle Drift (A)", "Bass", makePreset({
+    factoryPresets.push_back({"Subtle Drift", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.75f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f},
         {"analogDrift", 0.35f},
@@ -1330,7 +1322,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Analog Breath (B)", "Bass", makePreset({
+    factoryPresets.push_back({"Analog Breath", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.05f},
         {"analogDrift", 0.65f},
@@ -1341,7 +1333,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.57f},
     })});
-    factoryPresets.push_back({"Unstable Voltage (C)", "Bass", makePreset({
+    factoryPresets.push_back({"Unstable Voltage", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.42f}, {"osc2Detune", 0.06f},
         {"analogDrift", 1.0f},

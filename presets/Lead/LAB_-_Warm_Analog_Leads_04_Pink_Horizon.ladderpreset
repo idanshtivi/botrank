@@ -1,4 +1,4 @@
-<LadderVoicePreset name="Pink Horizon (Warm)" category="Lead" version="1">
+<LadderVoicePreset name="Rose Horizon" category="Lead" version="1">
   <PARAM id="playMode" value="0"/>
   <PARAM id="osc1Enabled" value="1"/>
   <PARAM id="osc2Enabled" value="1"/>

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<LadderVoicePreset name="03 Beyond Orion" category="Pad" version="1">
+<LadderVoicePreset name="Beyond Orion" category="Pad" version="1">
   <PARAM id="playMode" value="1.0"/>
   <PARAM id="osc1Enabled" value="1.0"/>
   <PARAM id="osc2Enabled" value="1.0"/>
