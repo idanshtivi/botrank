@@ -1,5 +1,9 @@
 #include "PresetManager.h"
 
+#if LADDERVOICE_HAS_EMBEDDED_PRESETS
+#include "PresetBinaryData.h"
+#endif
+
 namespace {
 // All APVTS parameter IDs used in presets
 static const char* const kAllParamIds[] = {
@@ -71,6 +75,26 @@ static PL makePreset(std::initializer_list<P> overrides)
 PresetManager::PresetManager()
 {
     buildFactoryPresets();
+    loadEmbeddedFactoryPresets();
+}
+
+void PresetManager::loadEmbeddedFactoryPresets()
+{
+#if LADDERVOICE_HAS_EMBEDDED_PRESETS
+    for (int i = 0; i < PresetBinaryData::namedResourceListSize; ++i) {
+        const char* resourceName = PresetBinaryData::namedResourceList[i];
+        int dataSize = 0;
+        const char* data = PresetBinaryData::getNamedResource(resourceName, dataSize);
+        if (data == nullptr || dataSize <= 0)
+            continue;
+
+        auto xml = juce::XmlDocument::parse(juce::String::fromUTF8(data, dataSize));
+        if (xml == nullptr || xml->getTagName() != "LadderVoicePreset")
+            continue;
+
+        factoryPresets.push_back(parsePresetXml(*xml));
+    }
+#endif
 }
 
 void PresetManager::buildFactoryPresets()
@@ -1127,16 +1151,14 @@ void PresetManager::buildFactoryPresets()
     })});
 
     // ══════════════════════════════════════════════════════════════════════
-    // LAB - BASS SHOOTOUT (15) — TEMPORARY listening-audition set, not a
-    // finished part of the commercial library. Three production-refined
-    // versions (A=Conservative, B=Balanced, C=Bold) of each of the five
-    // winning concepts from the "LAB - Extreme Bass Exploration" analysis
-    // pass (Waveform Clash, Resonance Edge, Dark Vintage, Wide Pulse
-    // Extreme, Max Analog Drift). Kept in its own category — not "Bass" —
-    // so it doesn't contaminate the shipped library with 15 near-duplicate
-    // entries before a winner is picked per concept. Delete this whole
-    // block (and, per concept, the two non-chosen versions) once the
-    // listening shootout is decided.
+    // BASS SHOOTOUT (15) — three production-refined versions
+    // (A=Conservative, B=Balanced, C=Bold) of each of the five winning
+    // concepts from the "LAB - Extreme Bass Exploration" analysis pass
+    // (Waveform Clash, Resonance Edge, Dark Vintage, Wide Pulse Extreme,
+    // Max Analog Drift). Originally kept isolated pending a listening
+    // decision on which A/B/C to keep per concept; merged into "Bass" on
+    // request, so the shipped Bass category now contains these near-
+    // duplicate A/B/C entries alongside everything else.
     // ══════════════════════════════════════════════════════════════════════
 
     // --- Concept 1: Waveform Clash (Narrow-pulse + RevSaw) ---
@@ -1146,7 +1168,7 @@ void PresetManager::buildFactoryPresets()
     // (dropped in the Bold version, where the buzz should dominate
     // unobstructed), backed pulse width off the lab's near-limit 0.12 for
     // A/B (kept for C), and tuned drive/output per version.
-    factoryPresets.push_back({"Clash Whisper (A)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Clash Whisper (A)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.75f}, {"osc1PulseWidth", 0.35f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.03f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.20f}, {"osc3KeyboardTracking", 1.0f},
@@ -1157,7 +1179,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Clash Core (B)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Clash Core (B)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.78f}, {"osc1PulseWidth", 0.20f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.48f}, {"osc2Detune", 0.04f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.18f}, {"osc3KeyboardTracking", 1.0f},
@@ -1168,7 +1190,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.58f},
     })});
-    factoryPresets.push_back({"Clash Extreme (C)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Clash Extreme (C)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.80f}, {"osc1PulseWidth", 0.14f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 3}, {"osc2Level", 0.55f}, {"osc2Detune", 0.05f},
         {"mixerDrive", 1.4f},
@@ -1187,7 +1209,7 @@ void PresetManager::buildFactoryPresets()
     // unison read as slightly sterile/phase-locked), and scaled contour
     // with resonance so the Bold version's peak is actively "ridden" by
     // the envelope rather than just sitting static.
-    factoryPresets.push_back({"Resonant Warmth (A)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Resonant Warmth (A)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.03f},
         {"mixerDrive", 0.9f},
@@ -1197,7 +1219,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.15f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Resonant Edge (B)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Resonant Edge (B)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f},
         {"mixerDrive", 1.0f},
@@ -1207,7 +1229,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.28f}, {"loudnessSustain", 0.22f}, {"loudnessRelease", 0.15f},
         {"masterVolume", 0.56f},
     })});
-    factoryPresets.push_back({"Resonant Scream (C)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Resonant Scream (C)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.05f},
         {"mixerDrive", 1.1f},
@@ -1223,7 +1245,7 @@ void PresetManager::buildFactoryPresets()
     // already musical -- the "extreme" here is purity, not harshness, so
     // refinement is about envelope playability and giving three genuinely
     // different intensities rather than fixing anything broken.
-    factoryPresets.push_back({"Vintage Whisper (A)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Vintage Whisper (A)", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.75f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.30f}, {"osc2Detune", 0.02f},
         {"mixerDrive", 0.25f},
@@ -1233,7 +1255,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.04f}, {"loudnessDecay", 0.40f}, {"loudnessSustain", 0.50f}, {"loudnessRelease", 0.30f},
         {"masterVolume", 0.62f},
     })});
-    factoryPresets.push_back({"Vintage Warmth (B)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Vintage Warmth (B)", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.03f},
         {"mixerDrive", 0.35f},
@@ -1243,7 +1265,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.012f}, {"loudnessDecay", 0.34f}, {"loudnessSustain", 0.45f}, {"loudnessRelease", 0.22f},
         {"masterVolume", 0.62f},
     })});
-    factoryPresets.push_back({"Vintage Push (C)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Vintage Push (C)", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.38f}, {"osc2Detune", 0.03f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.18f}, {"osc3KeyboardTracking", 1.0f},
@@ -1260,7 +1282,7 @@ void PresetManager::buildFactoryPresets()
     // Narrow+RevSaw, aimed at a nasal/reedy character rather than Clash's
     // buzzy edge. Production changes mirror Clash's: pulse width backed
     // off the lab extreme for A/B, drive/output balanced per version.
-    factoryPresets.push_back({"Reed Whisper (A)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Reed Whisper (A)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.75f}, {"osc1PulseWidth", 0.35f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.30f},
         {"mixerDrive", 0.8f},
@@ -1270,7 +1292,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.28f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Reed Core (B)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Reed Core (B)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.78f}, {"osc1PulseWidth", 0.22f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.35f},
         {"mixerDrive", 1.0f},
@@ -1280,7 +1302,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.57f},
     })});
-    factoryPresets.push_back({"Reed Scream (C)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Reed Scream (C)", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.80f}, {"osc1PulseWidth", 0.14f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 5}, {"osc2Range", 3}, {"osc2Level", 0.42f},
         {"mixerDrive", 1.3f},
@@ -1297,7 +1319,7 @@ void PresetManager::buildFactoryPresets()
     // inherently subtle, A/B/C vary the drift AMOUNT itself (not just the
     // surrounding patch) so the three versions are genuinely different in
     // how audible the "aliveness" is, not just louder/darker.
-    factoryPresets.push_back({"Subtle Drift (A)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Subtle Drift (A)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.75f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.35f}, {"osc2Detune", 0.04f},
         {"analogDrift", 0.35f},
@@ -1308,7 +1330,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.004f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.14f},
         {"masterVolume", 0.60f},
     })});
-    factoryPresets.push_back({"Analog Breath (B)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Analog Breath (B)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.05f},
         {"analogDrift", 0.65f},
@@ -1319,7 +1341,7 @@ void PresetManager::buildFactoryPresets()
         {"loudnessAttack", 0.003f}, {"loudnessDecay", 0.26f}, {"loudnessSustain", 0.25f}, {"loudnessRelease", 0.13f},
         {"masterVolume", 0.57f},
     })});
-    factoryPresets.push_back({"Unstable Voltage (C)", "LAB - Bass Shootout", makePreset({
+    factoryPresets.push_back({"Unstable Voltage (C)", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.78f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.42f}, {"osc2Detune", 0.06f},
         {"analogDrift", 1.0f},
@@ -1332,17 +1354,13 @@ void PresetManager::buildFactoryPresets()
     })});
 
     // ══════════════════════════════════════════════════════════════════════
-    // LAB - BASS EXPLORATION 03 (10) — TEMPORARY listening-audition set for
-    // this session only. Ten bass IDENTITIES, each built on a different
-    // design mechanism (octave/range choice, unison vs. wide-interval
-    // tuning, drive-based saturation vs. filter resonance, envelope shape,
-    // LFO destination, noise layer, glide) so no two share an oscillator
-    // recipe, envelope shape, filter strategy, or mixer balance. Kept in
-    // its own category — separate from "Bass" and from "LAB - Bass
-    // Shootout" — so it doesn't contaminate either library before an
-    // audition decides which (if any) get promoted. Session-isolated per
-    // the new LAB workflow: do not merge into Factory Bass, do not edit in
-    // a future "LAB - Bass Exploration 0N" session.
+    // BASS EXPLORATION 03 (10) — ten bass IDENTITIES, each built on a
+    // different design mechanism (octave/range choice, unison vs. wide-
+    // interval tuning, drive-based saturation vs. filter resonance,
+    // envelope shape, LFO destination, noise layer, glide) so no two share
+    // an oscillator recipe, envelope shape, filter strategy, or mixer
+    // balance. Originally kept isolated pending an audition decision;
+    // merged into "Bass" on request.
     // ══════════════════════════════════════════════════════════════════════
 
     // 1. 1971 Vintage Moog
@@ -1355,7 +1373,7 @@ void PresetManager::buildFactoryPresets()
     // classic percussive "honk", and full keyboard tracking so the tone
     // stays consistent across the range. This is the reference archetype
     // every other preset in this set deliberately breaks from.
-    factoryPresets.push_back({"1971 Vintage Moog", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"1971 Vintage Moog", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 2}, {"osc1Level", 0.85f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 2}, {"osc2Level", 0.50f}, {"osc2Detune", 0.05f},
         {"mixerDrive", 1.2f},
@@ -1375,7 +1393,7 @@ void PresetManager::buildFactoryPresets()
     // filter keyboard tracking OFF so the cutoff never rises and thins the
     // low end, and slow envelopes with a very high sustain so the sub
     // holds rock-steady under a note.
-    factoryPresets.push_back({"Deep Sub Foundation", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Deep Sub Foundation", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 0}, {"osc1Level", 0.95f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 1}, {"osc2Level", 0.45f},
         {"mixerDrive", 0.50f},
@@ -1395,7 +1413,7 @@ void PresetManager::buildFactoryPresets()
     // filter attack/decay to zero sustain, and a matching amp envelope
     // that dies just as fast — the note is over before it can sustain,
     // like a slapped string.
-    factoryPresets.push_back({"Funk Snap", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Funk Snap", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 4}, {"osc2Range", 3}, {"osc2Level", 0.50f}, {"osc2Detune", 0.03f},
         {"mixerDrive", 1.3f},
@@ -1414,7 +1432,7 @@ void PresetManager::buildFactoryPresets()
     // here), resonance pushed near the edge with a high contour and a
     // mid-fast filter decay for the classic acid sweep, glide enabled for
     // slides between notes, and high filter drive for grit.
-    factoryPresets.push_back({"Acid Bite", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Acid Bite", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.90f},
         {"mixerDrive", 1.0f},
         {"filterCutoff", 300.0f}, {"filterResonance", 0.82f}, {"filterContour", 0.75f},
@@ -1434,7 +1452,7 @@ void PresetManager::buildFactoryPresets()
     // envelope so the grit is heard through the whole note rather than
     // just the transient. Master volume pulled down to compensate for the
     // gain the drive stages add.
-    factoryPresets.push_back({"Dirty Drive", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Dirty Drive", "Bass", makePreset({
         {"osc1Waveform", 2}, {"osc1Range", 3}, {"osc1Level", 0.85f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.60f}, {"osc2Detune", 0.06f},
         {"mixerDrive", 2.6f},
@@ -1454,7 +1472,7 @@ void PresetManager::buildFactoryPresets()
     // filter for a subtle breathing motion, and octave-spread
     // triangle/tri-saw oscillators for a foundation-plus-air texture with
     // no edge or drive.
-    factoryPresets.push_back({"Dark Cinematic", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Dark Cinematic", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 2}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 1}, {"osc2Range", 3}, {"osc2Level", 0.40f}, {"osc2Detune", 0.02f},
         {"mixerDrive", 0.60f},
@@ -1475,7 +1493,7 @@ void PresetManager::buildFactoryPresets()
     // than the amp decay so the "boing" is still audible after the
     // loudness has settled — a different envelope-timing mechanism from
     // Funk Snap's synchronized instant decay.
-    factoryPresets.push_back({"Rubber Bass", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Rubber Bass", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 3}, {"osc1Level", 0.75f}, {"osc1PulseWidth", 0.30f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.40f},
         {"mixerDrive", 0.90f},
@@ -1495,7 +1513,7 @@ void PresetManager::buildFactoryPresets()
     // a fast attack into a punchy mid-decay sustain. Master volume pushed
     // up for loudness rather than pulled back like the driven-but-warm
     // Dirty Drive preset.
-    factoryPresets.push_back({"Aggressive Modern", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Aggressive Modern", "Bass", makePreset({
         {"osc1Waveform", 4}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 2}, {"osc2Range", 3}, {"osc2Level", 0.65f}, {"osc2Detune", 0.25f},
         {"osc3Enabled", 1.0f}, {"osc3Waveform", 2}, {"osc3Range", 2}, {"osc3Level", 0.35f}, {"osc3KeyboardTracking", 1.0f},
@@ -1516,7 +1534,7 @@ void PresetManager::buildFactoryPresets()
     // for chorus warmth instead of saw+square unison, essentially no
     // filter resonance or contour, and slower, rounder attack/decay curves
     // for a soft Rhodes-bass-like character with no punch or edge at all.
-    factoryPresets.push_back({"Warm Vintage", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Warm Vintage", "Bass", makePreset({
         {"osc1Waveform", 0}, {"osc1Range", 3}, {"osc1Level", 0.80f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 0}, {"osc2Range", 3}, {"osc2Level", 0.55f}, {"osc2Detune", 0.12f},
         {"mixerDrive", 0.40f},
@@ -1538,7 +1556,7 @@ void PresetManager::buildFactoryPresets()
     // filter, unlike Dark Cinematic) for an unstable wobble, and filter
     // keyboard tracking off so the tone behaves unpredictably across the
     // range.
-    factoryPresets.push_back({"Experimental Analog", "LAB - Bass Exploration 03", makePreset({
+    factoryPresets.push_back({"Experimental Analog", "Bass", makePreset({
         {"osc1Waveform", 6}, {"osc1Range", 0}, {"osc1Level", 0.70f}, {"osc1PulseWidth", 0.20f},
         {"osc2Enabled", 1.0f}, {"osc2Waveform", 3}, {"osc2Range", 4}, {"osc2Level", 0.45f},
         {"noiseLevel", 0.12f}, {"noiseMode", 0.0f},
@@ -1656,6 +1674,176 @@ bool PresetManager::deleteUserPreset(int index)
     bool ok = userPresetFiles[(size_t)index].deleteFile();
     if (ok) refreshUserPresets();
     return ok;
+}
+
+juce::StringArray PresetManager::getHiddenLabFolders() const
+{
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("hidden_lab_folders.txt");
+    if (!file.existsAsFile()) return {};
+    auto hidden = juce::StringArray::fromLines(file.loadFileAsString());
+    hidden.removeEmptyStrings();
+    return hidden;
+}
+
+void PresetManager::hideLabFolder(const juce::String& name)
+{
+    auto hidden = getHiddenLabFolders();
+    if (hidden.contains(name, true)) return;
+    hidden.add(name);
+
+    auto file = getUserPresetFolder().getParentDirectory().getChildFile("hidden_lab_folders.txt");
+    file.getParentDirectory().createDirectory();
+    file.replaceWithText(hidden.joinIntoString("\n"));
+}
+
+int PresetManager::renameUserPresetsCategory(const juce::String& oldCategory, const juce::String& newCategory)
+{
+    const auto trimmedNew = newCategory.trim();
+    if (trimmedNew.isEmpty()) return 0;
+
+    juce::Array<juce::File> toMove;
+    for (int i = 0; i < (int)userPresetFiles.size(); ++i)
+        if (getUserPresetCategory(i).equalsIgnoreCase(oldCategory))
+            toMove.add(userPresetFiles[(size_t)i]);
+
+    int moved = 0;
+    for (auto& oldFile : toMove) {
+        auto xml = juce::XmlDocument::parse(oldFile);
+        if (xml == nullptr) continue;
+
+        const auto name = xml->getStringAttribute("name", oldFile.getFileNameWithoutExtension());
+        auto newFile = userPresetFile(name, trimmedNew);
+        if (newFile != oldFile && newFile.existsAsFile())
+            continue; // a different preset already occupies that name+category — leave this one be
+
+        xml->setAttribute("category", trimmedNew);
+        if (xml->writeTo(newFile)) {
+            if (newFile != oldFile) oldFile.deleteFile();
+            ++moved;
+        }
+    }
+
+    refreshUserPresets();
+    return moved;
+}
+
+int PresetManager::deleteUserPresetsInCategory(const juce::String& category)
+{
+    juce::Array<juce::File> toDelete;
+    for (int i = 0; i < (int)userPresetFiles.size(); ++i)
+        if (getUserPresetCategory(i).equalsIgnoreCase(category))
+            toDelete.add(userPresetFiles[(size_t)i]);
+
+    int deleted = 0;
+    for (auto& f : toDelete)
+        if (f.deleteFile()) ++deleted;
+
+    refreshUserPresets();
+    return deleted;
+}
+
+bool PresetManager::renameUserPreset(int index, const juce::String& newName)
+{
+    if (index < 0 || index >= (int)userPresetFiles.size()) return false;
+
+    const auto trimmedName = newName.trim();
+    if (trimmedName.isEmpty()) return false;
+
+    auto oldFile = userPresetFiles[(size_t)index];
+    auto xml = juce::XmlDocument::parse(oldFile);
+    if (xml == nullptr) return false;
+
+    const auto category = xml->getStringAttribute("category", "User");
+    auto newFile = userPresetFile(trimmedName, category);
+    if (newFile != oldFile && newFile.existsAsFile())
+        return false; // a different preset already occupies that name+category
+
+    xml->setAttribute("name", trimmedName);
+    if (!xml->writeTo(newFile))
+        return false;
+    if (newFile != oldFile)
+        oldFile.deleteFile();
+
+    refreshUserPresets();
+    return true;
+}
+
+bool PresetManager::importPresetFile(const juce::File& sourceFile, juce::String& errorOut)
+{
+    return importPresetFile(sourceFile, {}, errorOut);
+}
+
+bool PresetManager::importPresetFile(const juce::File& sourceFile, const juce::String& destinationCategory, juce::String& errorOut)
+{
+    if (!sourceFile.existsAsFile()) {
+        errorOut = sourceFile.getFileName() + ": file not found";
+        return false;
+    }
+
+    auto xml = juce::XmlDocument::parse(sourceFile);
+    if (xml == nullptr || xml->getTagName() != "LadderVoicePreset") {
+        errorOut = sourceFile.getFileName() + ": not a valid Ladder Voice preset file";
+        return false;
+    }
+
+    auto name = xml->getStringAttribute("name", sourceFile.getFileNameWithoutExtension()).trim();
+    if (name.isEmpty()) name = sourceFile.getFileNameWithoutExtension();
+    auto category = destinationCategory.trim();
+    if (category.isEmpty())
+        category = xml->getStringAttribute("category", "User").trim();
+    if (category.isEmpty()) category = "User";
+
+    // Auto-dedupe rather than fail or silently overwrite — see header comment.
+    auto candidateName = name;
+    for (int suffix = 2; userPresetExists(candidateName, category); ++suffix)
+        candidateName = name + " (" + juce::String(suffix) + ")";
+
+    auto folder = getUserPresetFolder();
+    folder.createDirectory();
+    xml->setAttribute("name", candidateName);
+    xml->setAttribute("category", category);
+    if (!xml->writeTo(userPresetFile(candidateName, category))) {
+        errorOut = sourceFile.getFileName() + ": failed to write into the presets folder";
+        return false;
+    }
+    return true;
+}
+
+int PresetManager::importPresetFolder(const juce::File& folder, juce::StringArray& errors)
+{
+    if (!folder.isDirectory()) {
+        errors.add(folder.getFileName() + ": not a folder");
+        return 0;
+    }
+
+    auto category = folder.getFileName().trim();
+    if (category.isEmpty()) category = "Imported";
+
+    int imported = 0;
+    for (auto& f : folder.findChildFiles(juce::File::findFiles, false, "*.ladderpreset")) {
+        auto xml = juce::XmlDocument::parse(f);
+        if (xml == nullptr || xml->getTagName() != "LadderVoicePreset") {
+            errors.add(f.getFileName() + ": not a valid Ladder Voice preset file");
+            continue;
+        }
+
+        auto name = xml->getStringAttribute("name", f.getFileNameWithoutExtension()).trim();
+        if (name.isEmpty()) name = f.getFileNameWithoutExtension();
+
+        auto candidateName = name;
+        for (int suffix = 2; userPresetExists(candidateName, category); ++suffix)
+            candidateName = name + " (" + juce::String(suffix) + ")";
+
+        auto destFolder = getUserPresetFolder();
+        destFolder.createDirectory();
+        xml->setAttribute("name", candidateName);
+        xml->setAttribute("category", category);
+        if (!xml->writeTo(userPresetFile(candidateName, category)))
+            errors.add(f.getFileName() + ": failed to write into the presets folder");
+        else
+            ++imported;
+    }
+    return imported;
 }
 
 void PresetManager::loadPresetAtIndex(int combinedIndex, juce::AudioProcessorValueTreeState& apvts)

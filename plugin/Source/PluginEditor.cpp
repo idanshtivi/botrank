@@ -212,6 +212,10 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
     : AudioProcessorEditor(&p), processor(p)
 {
     setLookAndFeel(&analogLookAndFeel);
+    // AlertWindow (Save/Rename/Import/Delete dialogs) is a separate top-level
+    // desktop window, not a descendant of this editor, so setLookAndFeel()
+    // above doesn't reach it — only the app-wide default does.
+    juce::LookAndFeel::setDefaultLookAndFeel(&analogLookAndFeel);
 
     // CONTROLLERS — buttons[0..2], sliders[0..2], combos[0]
     addToggle("Glide",     "glideEnabled");      // buttons[0]
@@ -389,6 +393,10 @@ LadderVoiceAudioProcessorEditor::LadderVoiceAudioProcessorEditor(LadderVoiceAudi
 LadderVoiceAudioProcessorEditor::~LadderVoiceAudioProcessorEditor()
 {
     presetNameLabel.removeMouseListener(this);
+    // Only clear the app-wide default if it's still ours — in a multi-instance
+    // host another open editor's analogLookAndFeel may have taken over since.
+    if (&juce::LookAndFeel::getDefaultLookAndFeel() == &analogLookAndFeel)
+        juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     setLookAndFeel(nullptr);
 }
 

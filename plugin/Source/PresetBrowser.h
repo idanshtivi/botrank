@@ -30,6 +30,7 @@ public:
     // Mouse events for hover tracking + category sidebar clicks
     void mouseMove(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
+    void mouseDown(const juce::MouseEvent&) override; // right-click on a category tab -> delete menu
     void mouseUp(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
@@ -46,6 +47,10 @@ private:
     juce::TextButton loadBtn  {"Load"};
     juce::TextButton saveBtn  {"Save As..."};
     juce::TextButton deleteBtn{"Delete"};
+    juce::TextButton renameBtn{"Rename"};
+    juce::TextButton importBtn{"Import"};
+    // Must outlive the async file-picker dialog it launches (JUCE requirement).
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
     // Rebuilt each time the browser opens / user saves. isHeader marks a
     // collapsible section row (used only in the "All" category, to group
@@ -101,7 +106,13 @@ private:
     void loadSelected();
     void saveAs();
     void deleteSelected();
-    void updateDeleteState();
+    void renameSelected();
+    void importPresets();       // asks Files vs. Folder, then dispatches below
+    void importPresetFiles();
+    void importPresetFolder();
+    void updateActionButtonsState();
+    void deleteCategory(const juce::String& category);
+    void renameCategory(const juce::String& category);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresetBrowser)
 };

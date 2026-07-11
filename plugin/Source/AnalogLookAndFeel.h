@@ -30,6 +30,21 @@ public:
                        bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
                        bool isMouseOver, bool isMouseDown) override;
 
+    // Full custom repaint of AlertWindow (Save/Rename/Import/Delete dialogs)
+    // rather than just recolouring LookAndFeel_V4's own drawAlertBox: that
+    // default draws the icon glyph and the title+message textLayout as two
+    // independently-positioned elements whose reserved widths can disagree,
+    // which read as overlapping/doubled text once the background stopped
+    // being a low-contrast grey — drawing the pre-built textLayout ourselves,
+    // once, into the exact rect JUCE already reserves for it sidesteps that
+    // entirely, and drops the icon glyph rather than reposition it.
+    void drawAlertBox(juce::Graphics& g, juce::AlertWindow& alert,
+                      const juce::Rectangle<int>& textArea, juce::TextLayout& textLayout) override;
+    int getAlertBoxWindowFlags() override;
+    juce::Font getAlertWindowTitleFont() override;
+    juce::Font getAlertWindowMessageFont() override;
+    juce::Font getAlertWindowFont() override;
+
     juce::Font getComboBoxFont(juce::ComboBox& box) override;
     void positionComboBoxText(juce::ComboBox& box, juce::Label& label) override;
     void drawLabel(juce::Graphics& g, juce::Label& label) override;

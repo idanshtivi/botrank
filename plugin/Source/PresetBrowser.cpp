@@ -20,6 +20,16 @@ const auto selBg       = juce::Colour(0xff5a3f18); // warm amber selection
 const auto hoverBg     = juce::Colour(0xff251c0e); // very dark warm brown — subtle hover
 const auto sepBg       = juce::Colour(0xff201d16);
 
+// Preset-development session folders, pinned as sidebar tabs even while
+// empty — see PresetManager::getHiddenLabFolders() for why deleting one
+// needs this same list available outside rebuildCategoryTabs() too. Add new
+// "LAB - ..." folders here; do not touch rebuildCategoryTabs()'s
+// kPreferredOrder, which is reserved for the shipped Factory taxonomy.
+// Previously pinned Mid Bass/Leads/Plucks/Keys/FX/Experimental exploration
+// session tabs — folded into the plain Bass/Lead/Pad/Keys taxonomy and
+// removed from here so they stop showing up as permanent empty tabs.
+const juce::StringArray kRegisteredLabFolders {};
+
 // Draws text with explicit per-character pixel tracking using GlyphArrangement.
 // JUCE 8 removed Font::getStringWidth; GlyphArrangement is the correct measurement API.
 static void drawTrackedText(juce::Graphics& g, const juce::String& text,
@@ -61,7 +71,7 @@ PresetBrowser::PresetBrowser(LadderVoiceAudioProcessor& proc,
                              std::function<void(const juce::String&)> cb)
     : processor(proc), onPresetLoaded(std::move(cb))
 {
-    setSize(560, 460);
+    setSize(560, 496); // +36 vs. the original 460 to fit the Rename/Import row without shrinking the list
 
     listBox.setModel(this);
     listBox.setMultipleSelectionEnabled(false);
@@ -91,12 +101,18 @@ PresetBrowser::PresetBrowser(LadderVoiceAudioProcessor& proc,
     loadBtn.setButtonText("Load");
     saveBtn.setButtonText("Save As...");
     deleteBtn.setButtonText("Delete");
+    renameBtn.setButtonText("Rename");
+    importBtn.setButtonText("Import");
     loadBtn.onClick   = [this] { loadSelected(); };
     saveBtn.onClick   = [this] { saveAs(); };
     deleteBtn.onClick = [this] { deleteSelected(); };
+    renameBtn.onClick = [this] { renameSelected(); };
+    importBtn.onClick = [this] { importPresets(); };
     addAndMakeVisible(loadBtn);
     addAndMakeVisible(saveBtn);
     addAndMakeVisible(deleteBtn);
+    addAndMakeVisible(renameBtn);
+    addAndMakeVisible(importBtn);
 
     rebuildEntries();
     listBox.selectRow(0);
@@ -109,7 +125,7 @@ PresetBrowser::PresetBrowser(LadderVoiceAudioProcessor& proc,
             break;
         }
     }
-    updateDeleteState();
+    updateActionButtonsState();
 }
 
 // ─── Category sidebar ───────────────────────────────────────────────────────
@@ -128,22 +144,6 @@ void PresetBrowser::rebuildCategoryTabs()
         "Bass", "Lead", "Pad", "Keys", "Brass", "Pluck", "Cinematic", "Performance", "FX", "User"
     };
 
-    // Preset-development session folders. Registered here so each one exists
-    // as a browser tab (and a valid search/save target) from the moment it's
-    // created, even before a single preset has been saved into it — normal
-    // category discovery below only finds categories that already have at
-    // least one preset. Add new "LAB - ..." folders to this list; do not
-    // touch kPreferredOrder, which is reserved for the shipped Factory
-    // sound-type taxonomy.
-    static const juce::StringArray kRegisteredLabFolders {
-        "LAB - Mid Bass Exploration 01",
-        "LAB - Leads Exploration 01",
-        "LAB - Plucks Exploration 01",
-        "LAB - Keys Exploration 01",
-        "LAB - FX Exploration 01",
-        "LAB - Experimental 01",
-    };
-
     auto& mgr = processor.presetManager;
     juce::StringArray discovered;
     for (int i = 0; i < mgr.getNumFactoryPresets(); ++i) {
@@ -157,8 +157,9 @@ void PresetBrowser::rebuildCategoryTabs()
         if (!discovered.contains(cat))
             discovered.add(cat);
     }
+    const auto hiddenLabFolders = mgr.getHiddenLabFolders();
     for (auto& c : kRegisteredLabFolders)
-        if (!discovered.contains(c))
+        if (!discovered.contains(c) && !hiddenLabFolders.contains(c, true))
             discovered.add(c);
 
     categoryNames.clear();
@@ -445,7 +446,7 @@ void PresetBrowser::deleteSelected()
             if (processor.presetManager.getCurrentPresetName() == name)
                 processor.presetManager.setCurrentPresetName("Init");
             rebuildEntries();
-            updateDeleteState();
+            updateActionButtonsState();
             if (onPresetLoaded) onPresetLoaded(processor.presetManager.getCurrentPresetName());
         }
     };
@@ -459,21 +460,294 @@ void PresetBrowser::deleteSelected()
         juce::ModalCallbackFunction::create(confirmCb));
 }
 
-// ─── Delete enable/disable ───────────────────────────────────────────────────
+void PresetBrowser::deleteCategory(const juce::String& category)
+{
+    auto& mgr = processor.presetManager;
+    int count = 0;
+    bool currentIsInCategory = false;
+    for (int i = 0; i < mgr.getNumUserPresets(); ++i) {
+        if (!mgr.getUserPresetCategory(i).equalsIgnoreCase(category)) continue;
+        ++count;
+        if (mgr.getUserPresetName(i).equalsIgnoreCase(mgr.getCurrentPresetName()))
+            currentIsInCategory = true;
+    }
 
-void PresetBrowser::updateDeleteState()
+    // A registered LAB folder is pinned as a tab even with zero presets, so
+    // deleting its presets alone wouldn't make it disappear like a normal
+    // category does — hideLabFolder() persists that the user explicitly
+    // deleted it, which rebuildCategoryTabs() honours. Still worth
+    // confirming even with count==0, since this is what actually removes the
+    // empty tab from the sidebar.
+    const bool isRegisteredLabFolder = kRegisteredLabFolders.contains(category, true);
+
+    if (count == 0 && !isRegisteredLabFolder) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "Delete Category", "\"" + category + "\" has no user presets to delete.");
+        return;
+    }
+
+    const auto message = count > 0
+        ? "Delete \"" + category + "\" and its " + juce::String(count) + " preset(s)? This cannot be undone."
+        : "Remove the empty \"" + category + "\" folder from the list?";
+
+    juce::AlertWindow::showOkCancelBox(
+        juce::MessageBoxIconType::WarningIcon,
+        "Delete Category",
+        message,
+        "Delete", "Cancel",
+        nullptr,
+        juce::ModalCallbackFunction::create([this, category, currentIsInCategory, isRegisteredLabFolder](int result) {
+            if (result != 1) return;
+
+            processor.presetManager.deleteUserPresetsInCategory(category);
+            if (isRegisteredLabFolder)
+                processor.presetManager.hideLabFolder(category);
+            if (currentIsInCategory) {
+                processor.presetManager.setCurrentPresetName("Init");
+                if (onPresetLoaded) onPresetLoaded("Init");
+            }
+            if (selectedCategory.equalsIgnoreCase(category)) selectedCategory = "All";
+            rebuildEntries();
+            listBox.selectRow(0);
+            updateActionButtonsState();
+        }));
+}
+
+void PresetBrowser::renameCategory(const juce::String& category)
+{
+    auto& mgr = processor.presetManager;
+    int count = 0;
+    for (int i = 0; i < mgr.getNumUserPresets(); ++i)
+        if (mgr.getUserPresetCategory(i).equalsIgnoreCase(category))
+            ++count;
+
+    if (count == 0) {
+        // Only a registered-but-empty LAB folder can reach this (a normal
+        // category tab only exists at all once it has at least one preset)
+        // — there's nothing to move to the new name, and a pinned tab can't
+        // itself be renamed, only retired via Delete.
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "Rename Category", "\"" + category + "\" is empty — nothing to rename.");
+        return;
+    }
+
+    auto* alertWindow = new juce::AlertWindow("Rename Category",
+        "Enter a new name for \"" + category + "\" (" + juce::String(count) + " preset(s)):",
+        juce::MessageBoxIconType::NoIcon);
+    alertWindow->addTextEditor("name", category);
+    alertWindow->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    const bool isRegisteredLabFolder = kRegisteredLabFolders.contains(category, true);
+
+    alertWindow->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, alertWindow, category, isRegisteredLabFolder](int result) {
+            std::unique_ptr<juce::AlertWindow> aw(alertWindow); // deleted on every return path
+            if (result != 1) return;
+
+            const auto newName = aw->getTextEditorContents("name").trim();
+            if (newName.isEmpty() || newName.equalsIgnoreCase(category)) return;
+
+            processor.presetManager.renameUserPresetsCategory(category, newName);
+            // The old pinned name would otherwise keep reappearing empty
+            // now that every preset has moved out of it — same reasoning as
+            // deleteCategory().
+            if (isRegisteredLabFolder)
+                processor.presetManager.hideLabFolder(category);
+            if (selectedCategory.equalsIgnoreCase(category)) selectedCategory = newName;
+            rebuildEntries();
+            listBox.selectRow(0);
+            updateActionButtonsState();
+        }), false);
+}
+
+void PresetBrowser::renameSelected()
 {
     const int row = listBox.getSelectedRow();
-    const bool canDelete = row >= 0
+    if (row < 0 || row >= (int)entries.size()) return;
+    const auto& e = entries[(size_t)row];
+    if (!e.isUser || e.sourceIndex < 0) return;
+
+    const bool wasCurrent = processor.presetManager.getCurrentPresetName().equalsIgnoreCase(e.name);
+    const int userIdx = e.sourceIndex;
+
+    auto* alertWindow = new juce::AlertWindow("Rename Preset",
+                                              "Enter a new name:",
+                                              juce::MessageBoxIconType::NoIcon);
+    alertWindow->addTextEditor("name", e.name);
+    alertWindow->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    alertWindow->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, alertWindow, userIdx, wasCurrent](int result) {
+            std::unique_ptr<juce::AlertWindow> aw(alertWindow); // deleted on every return path
+            if (result != 1) return;
+
+            const auto newName = aw->getTextEditorContents("name").trim();
+            if (newName.isEmpty()) {
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "Rename Preset", "Please enter a name.");
+                return;
+            }
+            if (!processor.presetManager.renameUserPreset(userIdx, newName)) {
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                    "Rename Preset", "A preset with that name already exists in this category.");
+                return;
+            }
+
+            if (wasCurrent) processor.presetManager.setCurrentPresetName(newName);
+            rebuildEntries();
+            for (int i = 0; i < (int)entries.size(); ++i) {
+                if (entries[(size_t)i].name == newName) {
+                    listBox.selectRow(i, false, true);
+                    break;
+                }
+            }
+            updateActionButtonsState();
+            if (wasCurrent && onPresetLoaded) onPresetLoaded(newName);
+        }), false);
+}
+
+void PresetBrowser::importPresets()
+{
+    auto* alertWindow = new juce::AlertWindow("Import Presets",
+        "Import loose preset file(s), or an entire folder as one named bank?",
+        juce::MessageBoxIconType::QuestionIcon);
+    alertWindow->addButton("Files...",  1);
+    alertWindow->addButton("Folder...", 2);
+    alertWindow->addButton("Cancel",    0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    alertWindow->enterModalState(true, juce::ModalCallbackFunction::create(
+        [this, alertWindow](int result) {
+            std::unique_ptr<juce::AlertWindow> aw(alertWindow); // deleted on every return path
+            if (result == 1) importPresetFiles();
+            else if (result == 2) importPresetFolder();
+        }), false);
+}
+
+void PresetBrowser::importPresetFiles()
+{
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Import Preset File(s)", juce::File(), "*.ladderpreset");
+
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
+                             | juce::FileBrowserComponent::canSelectFiles
+                             | juce::FileBrowserComponent::canSelectMultipleItems;
+
+    fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+        const auto files = fc.getResults();
+        if (files.isEmpty()) return;
+
+        rebuildCategoryTabs();
+        juce::StringArray importCategories;
+        importCategories.add("User");
+        for (auto& c : categoryNames)
+            if (!c.equalsIgnoreCase("All") && !importCategories.contains(c))
+                importCategories.add(c);
+
+        auto* alertWindow = new juce::AlertWindow("Import Preset(s)",
+            "Choose the destination folder/category for the selected preset file(s):",
+            juce::MessageBoxIconType::NoIcon);
+        alertWindow->addComboBox("category", importCategories, "Import Into");
+        if (auto* combo = alertWindow->getComboBoxComponent("category")) {
+            const auto preferred = selectedCategory.equalsIgnoreCase("All") ? processor.presetManager.getLastSaveCategory() : selectedCategory;
+            const int idx = importCategories.indexOf(preferred, true);
+            combo->setSelectedItemIndex(idx >= 0 ? idx : 0, juce::dontSendNotification);
+        }
+        alertWindow->addButton("Import", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        alertWindow->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+        alertWindow->enterModalState(true, juce::ModalCallbackFunction::create(
+            [this, alertWindow, files](int result) {
+                std::unique_ptr<juce::AlertWindow> aw(alertWindow);
+                if (result != 1) return;
+
+                juce::String category = "User";
+                if (auto* combo = aw->getComboBoxComponent("category")) {
+                    const auto text = combo->getText().trim();
+                    if (text.isNotEmpty()) category = text;
+                }
+
+                auto& mgr = processor.presetManager;
+                int imported = 0;
+                juce::StringArray errors;
+                for (auto& f : files) {
+                    juce::String err;
+                    if (mgr.importPresetFile(f, category, err)) ++imported;
+                    else if (err.isNotEmpty()) errors.add(err);
+                }
+
+                mgr.setLastSaveCategory(category);
+                mgr.refreshUserPresets();
+                selectedCategory = category;
+                rebuildEntries();
+                updateActionButtonsState();
+
+                if (!errors.isEmpty()) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                        "Import Preset(s)",
+                        juce::String(imported) + " imported into \"" + category + "\", "
+                            + juce::String(errors.size()) + " failed:\n" + errors.joinIntoString("\n"));
+                } else if (imported > 0) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                        "Import Preset(s)", juce::String(imported) + " preset(s) imported into \"" + category + "\".");
+                }
+            }), false);
+    });
+}
+
+void PresetBrowser::importPresetFolder()
+{
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Import a Preset Folder as a Bank", juce::File());
+
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
+                             | juce::FileBrowserComponent::canSelectDirectories;
+
+    fileChooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+        const auto folder = fc.getResult();
+        if (folder == juce::File{}) return;
+
+        auto& mgr = processor.presetManager;
+        juce::StringArray errors;
+        const int imported = mgr.importPresetFolder(folder, errors);
+
+        mgr.refreshUserPresets();
+        rebuildEntries();
+        updateActionButtonsState();
+
+        if (!errors.isEmpty()) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "Import Preset Folder",
+                juce::String(imported) + " imported into \"" + folder.getFileName() + "\", "
+                    + juce::String(errors.size()) + " failed:\n" + errors.joinIntoString("\n"));
+        } else if (imported > 0) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                "Import Preset Folder",
+                juce::String(imported) + " preset(s) imported as the \"" + folder.getFileName() + "\" bank.");
+        } else {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "Import Preset Folder", "No .ladderpreset files found in that folder.");
+        }
+    });
+}
+
+// ─── Action-button enable/disable ────────────────────────────────────────────
+
+void PresetBrowser::updateActionButtonsState()
+{
+    const int row = listBox.getSelectedRow();
+    const bool isUserRowSelected = row >= 0
         && row < (int)entries.size()
         && entries[(size_t)row].isUser
         && entries[(size_t)row].sourceIndex >= 0;
-    deleteBtn.setEnabled(canDelete);
+    deleteBtn.setEnabled(isUserRowSelected);
+    renameBtn.setEnabled(isUserRowSelected);
 }
 
 void PresetBrowser::selectedRowsChanged(int /*lastRowSelected*/)
 {
-    updateDeleteState();
+    updateActionButtonsState();
 }
 
 // ─── Hover tracking ──────────────────────────────────────────────────────────
@@ -538,9 +812,30 @@ void PresetBrowser::mouseExit(const juce::MouseEvent& e)
     }
 }
 
+void PresetBrowser::mouseDown(const juce::MouseEvent& e)
+{
+    if (e.eventComponent != this || !e.mods.isPopupMenu()) return;
+    if (!categorySidebarArea.contains(e.getPosition())) return;
+
+    for (int i = 0; i < (int)categoryTabRects.size(); ++i) {
+        if (!categoryTabRects[(size_t)i].contains(e.getPosition())) continue;
+        const auto category = categoryNames[i];
+        if (category.equalsIgnoreCase("All")) return; // not a real folder to rename/delete
+
+        juce::PopupMenu menu;
+        menu.addItem(1, "Rename \"" + category + "\"...");
+        menu.addItem(2, "Delete \"" + category + "\"...");
+        menu.showMenuAsync(juce::PopupMenu::Options(), [this, category](int result) {
+            if (result == 1) renameCategory(category);
+            else if (result == 2) deleteCategory(category);
+        });
+        return;
+    }
+}
+
 void PresetBrowser::mouseUp(const juce::MouseEvent& e)
 {
-    if (e.eventComponent != this) return;
+    if (e.eventComponent != this || e.mods.isPopupMenu()) return;
     if (!categorySidebarArea.contains(e.getPosition())) return;
     for (int i = 0; i < (int)categoryTabRects.size(); ++i) {
         if (categoryTabRects[(size_t)i].contains(e.getPosition())) {
@@ -551,7 +846,7 @@ void PresetBrowser::mouseUp(const juce::MouseEvent& e)
             if (isSearching()) searchBox.clear();
             rebuildEntries();
             listBox.selectRow(0);
-            updateDeleteState();
+            updateActionButtonsState();
             return;
         }
     }
@@ -777,6 +1072,9 @@ void PresetBrowser::resized()
     auto btnRow = area.removeFromBottom(36);
     area.removeFromBottom(5);
 
+    auto secondaryBtnRow = area.removeFromBottom(28); // Rename / Import
+    area.removeFromBottom(6);
+
     auto sidebar = area.removeFromLeft(128);
     area.removeFromLeft(10); // gap + divider line drawn in paint()
 
@@ -811,4 +1109,9 @@ void PresetBrowser::resized()
     saveBtn.setBounds(btnRow.removeFromLeft(btnW));
     btnRow.removeFromLeft(4);
     deleteBtn.setBounds(btnRow);
+
+    const int secondaryBtnW = (secondaryBtnRow.getWidth() - 4) / 2;
+    renameBtn.setBounds(secondaryBtnRow.removeFromLeft(secondaryBtnW));
+    secondaryBtnRow.removeFromLeft(4);
+    importBtn.setBounds(secondaryBtnRow);
 }

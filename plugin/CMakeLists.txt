@@ -41,6 +41,24 @@ if(LADDERVOICE_FONT_FILES)
             ${LADDERVOICE_FONT_FILES})
 endif()
 
+# Embedded factory preset library (Resources/... style bundling, but sourced
+# from the top-level presets/ tree so preset authoring stays plain .ladderpreset
+# XML files on disk — no hand-typed C++ literals). Compiled straight into the
+# plugin binary via the same juce_add_binary_data mechanism already used for
+# fonts, so every end user gets the full library with zero install/import step.
+file(GLOB_RECURSE LADDERVOICE_PRESET_FILES
+    "${CMAKE_SOURCE_DIR}/presets/*.ladderpreset")
+if(LADDERVOICE_PRESET_FILES)
+    # Distinct NAMESPACE/HEADER_NAME: avoids colliding with both the plain
+    # BinaryData:: symbols (LadderVoiceAssets) and the PresetData struct
+    # already declared in PresetManager.h.
+    juce_add_binary_data(LadderVoicePresetData
+        NAMESPACE PresetBinaryData
+        HEADER_NAME PresetBinaryData.h
+        SOURCES
+            ${LADDERVOICE_PRESET_FILES})
+endif()
+
 target_include_directories(LadderVoice
     PRIVATE
         ${CMAKE_SOURCE_DIR}/synth_core/Include)
@@ -67,6 +85,11 @@ target_compile_definitions(LadderVoice
 if(LADDERVOICE_FONT_FILES)
     target_link_libraries(LadderVoice PRIVATE LadderVoiceFonts)
     target_compile_definitions(LadderVoice PRIVATE LADDERVOICE_HAS_EMBEDDED_FONTS=1)
+endif()
+
+if(LADDERVOICE_PRESET_FILES)
+    target_link_libraries(LadderVoice PRIVATE LadderVoicePresetData)
+    target_compile_definitions(LadderVoice PRIVATE LADDERVOICE_HAS_EMBEDDED_PRESETS=1)
 endif()
 
 set(TRUSTED_BIN_DIR "${CMAKE_SOURCE_DIR}/trusted_bin")

@@ -76,6 +76,24 @@ AnalogLookAndFeel::AnalogLookAndFeel()
     setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(0xff3a2f19));
     setColour(juce::PopupMenu::highlightedTextColourId, juce::Colour(0xffffedc1));
 
+    // AlertWindow (Save/Rename/Import/Delete dialogs) — it's a separate
+    // top-level desktop window, not a child of the plugin editor's component
+    // tree, so it can't pick up this look-and-feel just by proximity; it
+    // only renders with this palette because this instance is also
+    // registered as the app-wide default (see setDefaultLookAndFeel in
+    // PluginEditor.cpp). Mirrors the preset browser's own warm cream/gold
+    // panel palette (PresetBrowser.cpp's anonymous-namespace constants)
+    // rather than LookAndFeel_V4's default dark-grey theme.
+    setColour(juce::AlertWindow::backgroundColourId, juce::Colour(0xffbcbbb1));
+    setColour(juce::AlertWindow::textColourId, juce::Colour(0xff17140f));
+    setColour(juce::AlertWindow::outlineColourId, juce::Colour(0xff5b574b));
+    setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff16130e));
+    setColour(juce::TextEditor::textColourId, juce::Colour(0xffd9cbb0));
+    setColour(juce::TextEditor::outlineColourId, comboBorder.withAlpha(0.55f));
+    setColour(juce::TextEditor::focusedOutlineColourId, accentGold.withAlpha(0.85f));
+    setColour(juce::TextEditor::highlightColourId, accentGold.withAlpha(0.35f));
+    setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xffffedc1));
+
     largeKnobStrip = juce::ImageFileFormat::loadFrom(BinaryData::knob_large_strip_png,
                                                      BinaryData::knob_large_strip_pngSize);
     mediumKnobStrip = juce::ImageFileFormat::loadFrom(BinaryData::knob_medium_strip_png,
@@ -776,6 +794,14 @@ void AnalogLookAndFeel::drawLabel(juce::Graphics& g, juce::Label& label)
         return;
     }
 
+    // Screen-reader-only labels (e.g. AlertWindow's accessibleMessageLabel)
+    // set textColourId fully transparent so sighted users never see them —
+    // drawEngraved's shadow/highlight passes use their own fixed alpha
+    // regardless of baseColour, though, so skipping straight to it here
+    // would paint a visible ghost outline of "invisible" text.
+    if (label.findColour(juce::Label::textColourId).isTransparent())
+        return;
+
     // Every plain caption (WAVE, RANGE, MODE, DETUNE, section titles drawn
     // via a Label, etc.) gets the same engraved/debossed look as the rest
     // of the panel's text, instead of LookAndFeel_V4's flat default.
@@ -828,6 +854,43 @@ void AnalogLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& l
     label.setColour(juce::Label::textColourId, box.isEnabled() ? juce::Colour(0xffffdf9a) : juce::Colour(0xff77756c));
     label.setInterceptsMouseClicks(false, false);
 }
+
+void AnalogLookAndFeel::drawAlertBox(juce::Graphics& g, juce::AlertWindow& alert,
+                                     const juce::Rectangle<int>& textArea, juce::TextLayout& textLayout)
+{
+    const auto bounds = alert.getLocalBounds().toFloat();
+    constexpr float corner = 6.0f;
+
+    // Fill the entire window rect (not just the rounded interior) before the
+    // rounded panel on top — leaves no unpainted corner for stale content to
+    // show through on repaint.
+    g.setColour(juce::Colour(0xffbcbbb1));
+    g.fillRect(bounds);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd8d7cc), bounds.getX(), bounds.getY(),
+                                           juce::Colour(0xffbcbbb1).darker(0.06f), bounds.getX(), bounds.getBottom(), false));
+    g.fillRoundedRectangle(bounds.reduced(1.0f), corner);
+    g.setColour(juce::Colour(0xff5b574b).withAlpha(0.70f));
+    g.drawRoundedRectangle(bounds.reduced(1.0f), corner, 1.5f);
+
+    g.setColour(alert.findColour(juce::AlertWindow::textColourId));
+    textLayout.draw(g, textArea.toFloat());
+}
+
+int AnalogLookAndFeel::getAlertBoxWindowFlags()
+{
+    // No native drop shadow — the panel draws its own border above, and a
+    // separate OS-composited shadow layer was a plausible source of the
+    // ghosted/doubled-looking text this replaces.
+    return juce::ComponentPeer::windowAppearsOnTaskbar;
+}
+
+// Sized for a spacious dialog rather than reusing popupTitle/popupEntry —
+// those are tuned for the compact preset-list rows and category tabs, and
+// bumping them here would also enlarge that unrelated UI.
+juce::Font AnalogLookAndFeel::getAlertWindowTitleFont()   { return Typography::font(Typography::Family::Label, Typography::Weight::SemiBold, 18.0f); }
+juce::Font AnalogLookAndFeel::getAlertWindowMessageFont() { return Typography::font(Typography::Family::Label, Typography::Weight::Regular, 15.5f); }
+juce::Font AnalogLookAndFeel::getAlertWindowFont()        { return Typography::font(Typography::Family::Label, Typography::Weight::Regular, 13.5f); }
 
 void AnalogLookAndFeel::drawScrollbar(juce::Graphics& g, juce::ScrollBar& /*scrollbar*/,
                                       int x, int y, int width, int height,
